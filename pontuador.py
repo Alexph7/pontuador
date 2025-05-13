@@ -1,34 +1,60 @@
 import os
 import logging
+import sys
+import asyncio
 import psycopg2
+from telegram.ext import ApplicationHandlerStop
 from psycopg2.extras import RealDictCursor
 from telegram import Update, Bot
+from dotenv import load_dotenv
+from telegram.ext import ApplicationBuilder, ContextTypes
+from telegram import BotCommand, BotCommandScopeDefault, BotCommandScopeAllPrivateChats
 from telegram.ext import (
-    Updater, CommandHandler, CallbackContext,
-    MessageHandler, filters
+    CommandHandler, CallbackContext,
+    MessageHandler, filters, ConversationHandler
 )
 
-# --- Configuração e constantes ---
-TOKEN = os.getenv('TELEGRAM_TOKEN')
-DATABASE_URL = os.getenv('DATABASE_URL')  # ex: postgres://user:pass@host:port/dbname
-ID_ADMIN = 123456789  # ID do administrador do bot
-LIMIAR_PONTUADOR = 500  # pontos para status de pontuador
-NIVEIS_BRINDES = {1000: 'Brinde Nível 1', 2000: 'Brinde Nível 2'}
-
-# --- Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Banco de dados ---
+load_dotenv()
 
+# --- Configuração e constantes ---
+BOT_TOKEN = os.getenv('TELEGRAM_TOKEN')
+if not BOT_TOKEN:
+    logger.error("TELEGRAM_TOKEN não encontrado.")
+    sys.exit(1)
+
+DATABASE_URL = os.getenv('DATABASE_URL')
+ID_ADMIN = 123456789
+LIMIAR_PONTUADOR = 500
+NIVEIS_BRINDES = {1000: 'Brinde Nível 1', 2000: 'Brinde Nível 2'}
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+
+ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "")
+if ADMIN_IDS_STR:
+    try:
+        ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_STR.split(',') if x.strip()]
+    except ValueError:
+        logger.error("ADMIN_IDS deve conter apenas números separados por vírgula.")
+        ADMIN_IDS = []
+else:
+    ADMIN_IDS = []
+
+
+# --- Estados de conversa ---
+
+ESPERANDO_SUPORTE, AGUARDANDO_SENHA = range(2)
+
+
+# --- Banco de dados ---
 def obter_conexao():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 
-def inicializar_bd():
+def init_db():
     with obter_conexao() as conn:
         with conn.cursor() as cur:
-            # tabela usuarios
             cur.execute("""
             CREATE TABLE IF NOT EXISTS usuarios (
                 user_id BIGINT PRIMARY KEY,
@@ -38,9 +64,6 @@ def inicializar_bd():
                 is_pontuador BOOLEAN NOT NULL DEFAULT FALSE,
                 visto BOOLEAN NOT NULL DEFAULT FALSE
             );
-            """)
-            # tabela historico
-            cur.execute("""
             CREATE TABLE IF NOT EXISTS historico_pontos (
                 id SERIAL PRIMARY KEY,
                 user_id BIGINT REFERENCES usuarios(user_id),
@@ -48,17 +71,11 @@ def inicializar_bd():
                 motivo TEXT,
                 data TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-            """)
-            # tabela bloqueios
-            cur.execute("""
             CREATE TABLE IF NOT EXISTS usuarios_bloqueados (
                 user_id BIGINT PRIMARY KEY,
                 motivo TEXT,
                 data TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-            """)
-            # tabela eventos (promoções)
-            cur.execute("""
             CREATE TABLE IF NOT EXISTS eventos (
                 id SERIAL PRIMARY KEY,
                 nome TEXT,
@@ -66,12 +83,16 @@ def inicializar_bd():
                 fim TIMESTAMP,
                 multiplicador INTEGER DEFAULT 1
             );
+            CREATE TABLE IF NOT EXISTS palavras_proibidas (
+                id SERIAL PRIMARY KEY,
+                palavra TEXT UNIQUE NOT NULL
+            );
             """)
             conn.commit()
 
 # --- Helpers de usuário e pontuação ---
 
-def adicionar_usuario(user_id: int, username: str):
+async def adicionar_usuario(user_id: int, username: str):
     with obter_conexao() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -82,14 +103,14 @@ def adicionar_usuario(user_id: int, username: str):
             conn.commit()
 
 
-def obter_usuario(user_id: int):
+async def obter_usuario(user_id: int):
     with obter_conexao() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM usuarios WHERE user_id = %s", (user_id,))
             return cur.fetchone()
 
 
-def registrar_historico(user_id: int, pontos: int, motivo: str = None):
+async def registrar_historico(user_id: int, pontos: int, motivo: str = None):
     with obter_conexao() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -99,68 +120,163 @@ def registrar_historico(user_id: int, pontos: int, motivo: str = None):
             conn.commit()
 
 
-def atualizar_pontos(user_id: int, delta: int, motivo: str = None, bot: Bot = None):
-    usuario = obter_usuario(user_id)
+async def atualizar_pontos(
+    user_id: int,
+    delta: int,
+    motivo: str = None,
+    bot: Bot = None
+) -> int | None:
+    # Busca usuário (async)
+    usuario = await obter_usuario(user_id)
     if not usuario:
         return None
+
+    # Calcula novos pontos e nível
     novos = usuario['pontos'] + delta
     ja_pontuador = usuario['is_pontuador']
     nivel = usuario['nivel_atingido']
 
-    # registra histórico
-    registrar_historico(user_id, delta, motivo)
+    # Registra histórico (async)
+    await registrar_historico(user_id, delta, motivo)
 
-    # verifica se vira pontuador
+    # Verifica se virou pontuador
     becomes_pontuador = False
     if not ja_pontuador and novos >= LIMIAR_PONTUADOR:
         ja_pontuador = True
         nivel += 1
         becomes_pontuador = True
 
-    # checa brindes
+    # Verifica brinde por nível
     brinde = None
     for limiar, nome in NIVEIS_BRINDES.items():
         if usuario['pontos'] < limiar <= novos:
             brinde = nome
             nivel += 1
+            break
 
-    # atualiza no banco
+    # Atualiza dados do usuário no banco
     with obter_conexao() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE usuarios SET pontos=%s, is_pontuador=%s, nivel_atingido=%s WHERE user_id=%s",
+                """
+                UPDATE usuarios
+                   SET pontos = %s,
+                       is_pontuador = %s,
+                       nivel_atingido = %s
+                 WHERE user_id = %s
+                """,
                 (novos, ja_pontuador, nivel, user_id)
             )
-            conn.commit()
+        conn.commit()
 
-    # notificações a você (admin)
+    # Envia notificações ao admin, se houver bot
     if bot:
-        admin_id = ID_ADMIN
+        texto_base = f"🔔 Usuário `{user_id}` atingiu {novos} pontos"
         if becomes_pontuador:
-            bot.send_message(
-                chat_id=admin_id,
-                text=(
-                    f"🔔 Usuário `{user_id}` atingiu {novos} pontos e virou PONTUADOR."
-                    f"{' Motivo: '+motivo if motivo else ''}"
-                ),
-                parse_mode='Markdown'
+            texto = texto_base + " e virou *PONTUADOR*." + (f" Motivo: {motivo}" if motivo else "")
+            asyncio.create_task(
+                bot.send_message(chat_id=ID_ADMIN, text=texto, parse_mode='Markdown')
             )
         if brinde:
-            bot.send_message(
-                chat_id=admin_id,
-                text=(
-                    f"🔔 Usuário `{user_id}` atingiu {limiar} pontos e ganhou *{brinde}*."
-                    f"{' Motivo: '+motivo if motivo else ''}"
-                ),
-                parse_mode='Markdown'
+            texto = texto_base + f" e ganhou *{brinde}*." + (f" Motivo: {motivo}" if motivo else "")
+            asyncio.create_task(
+                bot.send_message(chat_id=ID_ADMIN, text=texto, parse_mode='Markdown')
             )
 
     return novos
 
+
+# Mensagem de Mural de Entrada
+async def setup_bot_description(app):
+    # descrição curta (topo da conversa)
+    await app.bot.set_my_short_description(
+        short_description=(
+            "🤖 Olá! Sou um bot do @cupomnavitrine – "
+            "Gerenciador de pontuação."
+        ),
+        language_code="pt"
+    )
+    # descrição longa (na página do bot)
+    await app.bot.set_my_description(
+        description=(
+            "🤖 Se inscreva em nosso canal @cupomnavitrine – "
+        ),
+        language_code="pt"
+    )
+    logger.info("Descrições do bot async definidas com sucesso.")
+
+
+async def setup_commands(app):
+    try:
+        # 1) Comandos públicos (grupos/canais)
+        await app.bot.set_my_commands(
+            [
+                BotCommand("meus_pontos", "Ver sua pontuação e nível"),
+                BotCommand("ranking_top10", "Top 10 de usuários por pontos"),
+                BotCommand("historico", "Mostrar seu histórico de pontos"),
+                BotCommand("como_ganhar", "Como ganhar mais pontos"),
+            ],
+            scope=BotCommandScopeDefault()
+        )
+
+        # 2) Comandos em chat privado (todos os anteriores + suporte, admin, etc.)
+        await app.bot.set_my_commands(
+            [
+                # Básicos
+                BotCommand("meus_pontos", "Ver sua pontuação e nível"),
+                BotCommand("ranking_top10", "Top 10 de usuários por pontos"),
+                BotCommand("historico", "Mostrar seu histórico de pontos"),
+                BotCommand("como_ganhar", "Como ganhar mais pontos"),
+
+                # Suporte
+                BotCommand("suporte", "Enviar mensagem ao suporte"),
+                BotCommand("cancelar", "Cancelar mensagem ao suporte suporte"),
+
+            ],
+            scope=BotCommandScopeAllPrivateChats()
+        )
+
+        logger.info("Comandos configurados para público e privado.")
+    except Exception:
+        logger.exception("Erro ao configurar comandos")
+
+
+ADMIN_MENU = (
+    "🔧 *Menu Admin* 🔧\n\n"
+    "/pontuar – Atribuir pontos a um usuário\n"
+    "/add_pontuador – Tornar usuário pontuador\n"
+    "/zerar_pontos – Zerar pontos\n"
+    "/remover_pontuador – Remover permissão de pontuador\n"
+    "/bloquear – Bloquear usuário\n"
+    "/desbloquear – Desbloquear usuário\n"
+    "/adapproibida – Adicionar palavra proibida\n"
+    "/delproibida – Remover palavra proibida\n"
+    "/listaproibida – Listar palavras proibidas\n"
+)
+
+async def iniciar_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    # se já é admin, exibe menu
+    if user_id in ADMIN_IDS:
+        context.user_data["is_admin"] = True
+        await update.message.reply_markdown(ADMIN_MENU)
+        return ConversationHandler.END
+
+    # senão, pede senha
+    await update.message.reply_text("🔒 Digite a senha de admin:")
+    return AGUARDANDO_SENHA
+
+async def tratar_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text.strip() == str(ADMIN_PASSWORD):
+        context.user_data["is_admin"] = True
+        await update.message.reply_markdown(ADMIN_MENU)
+    else:
+        await update.message.reply_text("❌ Senha incorreta. Acesso negado.")
+    return ConversationHandler.END
+
 # --- Helpers de bloqueio ---
 
-def bloquear_usuario(user_id: int, motivo: str = None):
-    """Adiciona um usuário à lista de bloqueados."""
+def bloquear_user_bd(user_id: int, motivo: str = None):
     with obter_conexao() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -171,8 +287,7 @@ def bloquear_usuario(user_id: int, motivo: str = None):
             conn.commit()
 
 
-def desbloquear_usuario(user_id: int):
-    """Remove um usuário da lista de bloqueados."""
+def desbloquear_user_bd(user_id: int):
     with obter_conexao() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -183,7 +298,6 @@ def desbloquear_usuario(user_id: int):
 
 
 def obter_bloqueado(user_id: int):
-    """Retorna o registro de bloqueio ou None."""
     with obter_conexao() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -192,105 +306,208 @@ def obter_bloqueado(user_id: int):
             )
             return cur.fetchone()
 
+# --- Helpers de palavras proibidas ---
+
+async def add_palavra_proibida_bd(palavra: str) -> bool:
+    with obter_conexao() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO palavras_proibidas (palavra) VALUES (%s) ON CONFLICT DO NOTHING",
+                (palavra.lower(),)
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+
+async def del_palavra_proibida_bd(palavra: str) -> bool:
+    with obter_conexao() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM palavras_proibidas WHERE palavra = %s",
+                (palavra.lower(),)
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+
+async def listar_palavras_proibidas_db() -> list:
+    with obter_conexao() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT palavra FROM palavras_proibidas")
+            return [row['palavra'] for row in cur.fetchall()]
+
 # --- Middleware de verificação de bloqueio ---
 
-def checar_bloqueio(update: Update, context: CallbackContext):
+async def checar_bloqueio(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     reg = obter_bloqueado(user_id)
     if reg:
         motivo = reg['motivo'] or 'sem motivo especificado'
-        # avisa ao usuário bloqueado
-        update.message.reply_text(f"⛔ Você está bloqueado. Motivo: {motivo}")
-        return True  # sinaliza que a mensagem foi tratada
-    return False
+        await update.message.reply_text(f"⛔ Você está bloqueado. Motivo: {motivo}")
+        raise ApplicationHandlerStop()
 
-# --- Handlers de bloquear e desbloquear ---
+# --- Handlers de bloqueio ---
 
-def comando_bloquear(update: Update, context: CallbackContext):
+async def bloquear_usuario(update: Update, context: CallbackContext):
     if update.effective_user.id != ID_ADMIN:
-        return update.message.reply_text("🔒 Apenas admin pode usar.")
-    args = context.args
-    if not args:
-        return update.message.reply_text("Uso: /bloquear <user_id> [motivo]")
+        return await update.message.reply_text("🔒 Apenas admin pode usar.")
     try:
-        alvo = int(args[0])
-    except ValueError:
-        return update.message.reply_text("ID deve ser um número.")
-    motivo = ' '.join(args[1:]) if len(args) > 1 else None
-    bloquear_usuario(alvo, motivo)
-    update.message.reply_text(f"✅ Usuário {alvo} bloqueado. Motivo: {motivo or 'nenhum'}")
+        alvo = int(context.args[0])
+    except:
+        return await update.message.reply_text("Uso: /bloquear <user_id> [motivo]")
+    motivo = ' '.join(context.args[1:]) or None
+    bloquear_user_bd(alvo, motivo)
+    await update.message.reply_text(f"✅ Usuário {alvo} bloqueado. Motivo: {motivo or 'nenhum'}")
 
 
-def comando_desbloquear(update: Update, context: CallbackContext):
+async def desbloquear_usuario(update: Update, context: CallbackContext):
     if update.effective_user.id != ID_ADMIN:
-        return update.message.reply_text("🔒 Apenas admin pode usar.")
-    args = context.args
-    if not args:
-        return update.message.reply_text("Uso: /desbloquear <user_id>")
+        return await update.message.reply_text("🔒 Apenas admin pode usar.")
     try:
-        alvo = int(args[0])
-    except ValueError:
-        return update.message.reply_text("ID deve ser um número.")
-    desbloquear_usuario(alvo)
-    update.message.reply_text(f"✅ Usuário {alvo} desbloqueado.")
+        alvo = int(context.args[0])
+    except:
+        return await update.message.reply_text("Uso: /desbloquear <user_id>")
+    desbloquear_user_bd(alvo)
+    await update.message.reply_text(f"✅ Usuário {alvo} desbloqueado.")
+
+# --- Handlers de palavras proibidas ---
+
+async def add_palavra_proibida(update: Update, context: CallbackContext):
+    if update.effective_user.id != ID_ADMIN:
+        return await update.message.reply_text("🔒 Apenas admin pode usar.")
+    if not context.args:
+        return await update.message.reply_text("Uso: /adapproibida <palavra>")
+    palavra = context.args[0].lower()
+    if add_palavra_proibida_bd(palavra):
+        await update.message.reply_text(f"✅ Palavra '{palavra}' adicionada à lista proibida.")
+    else:
+        await update.message.reply_text(f"⚠️ Palavra '{palavra}' já está na lista.")
 
 
-# --- Handlers de comando ---
+async def del_palavra_proibida(update: Update, context: CallbackContext):
+    if update.effective_user.id != ID_ADMIN:
+        return await update.message.reply_text("🔒 Apenas admin pode usar.")
+    if not context.args:
+        return await update.message.reply_text("Uso: /delproibida <palavra>")
+    palavra = context.args[0].lower()
+    if await del_palavra_proibida_bd(palavra):
+        await update.message.reply_text(f"🗑️ Palavra '{palavra}' removida da lista.")
+    else:
+        await update.message.reply_text(f"⚠️ Palavra '{palavra}' não encontrada.")
 
-def comando_iniciar(update: Update, context: CallbackContext):
+
+async def listar_palavras_proibidas(update: Update, context: CallbackContext):
+    if update.effective_user.id != ID_ADMIN:
+        return await update.message.reply_text("🔒 Apenas admin pode usar.")
+    palavras = listar_palavras_proibidas_db()
+    text = "Nenhuma" if not palavras else ", ".join(palavras)
+    await update.message.reply_text(f"🔒 Palavras proibidas: {text}")
+
+# --- Handler de suporte ---
+
+async def suporte(update: Update, context: CallbackContext):
+    await update.message.reply_text("📝 Escreva sua mensagem de suporte (máx. 500 caracteres). Use /cancelar para abortar.")
+    return ESPERANDO_SUPORTE
+
+
+async def receber_suporte(update: Update, context: CallbackContext):
+    texto = update.message.text.strip()
+    if len(texto) > 500:
+        await update.message.reply_text("❌ Sua mensagem ultrapassa 500 caracteres. Tente novamente.")
+        return ESPERANDO_SUPORTE
+    for palavra in listar_palavras_proibidas_db():
+        if palavra in texto.lower():
+            await update.message.reply_text(
+                "🚫 Sua mensagem contém uma palavra proibida. Revise e tente novamente."
+            )
+            return ESPERANDO_SUPORTE
     user = update.effective_user
-    adicionar_usuario(user.id, user.username)
-    update.message.reply_text("Olá! Sou o bot pontuador. Use /meus_pontos para ver seus pontos.")
+    context.bot.send_message(
+        chat_id=ID_ADMIN,
+        text=f"📩 Suporte de {user.username or user.id}: {texto}",
+        parse_mode='Markdown'
+    )
+    await update.message.reply_text("✅ Sua mensagem foi enviada. Obrigado!")
+    return ConversationHandler.END
 
 
-def meus_pontos(update: Update, context: CallbackContext):
+async def cancelar(update: Update, context: CallbackContext):
+    await update.message.reply_text("❌ Suporte cancelado.")
+    return ConversationHandler.END
+
+# --- Handlers de comando existentes ---
+
+# Handler para /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🤖 Olá! Bem-vindo ao Bot de Pontuação da Vitrine.\n\n"
+        "Aqui você pode:\n"
+        "• Ver seus pontos com /meus_pontos\n"
+        "• Conferir o ranking com /ranking_top10\n"
+        "• Ver seu histórico com /historico\n"
+        "• Saber como ganhar pontos com /como_ganhar\n\n"
+        "Basta clicar em um comando ou digitá-lo na conversa. Vamos começar?"
+    )
+
+
+async def meus_pontos(update: Update, context: CallbackContext):
     user = update.effective_user
+    # garante que o usuário exista na base
     adicionar_usuario(user.id, user.username)
     u = obter_usuario(user.id)
-    update.message.reply_text(f"Você tem {u['pontos']} pontos (Nível {u['nivel_atingido']}).")
+    # envia a resposta normalmente
+    await update.message.reply_text(
+        f"Você tem {u['pontos']} pontos (Nível {u['nivel_atingido']})."
+    )
 
 
-def comando_pontuar(update: Update, context: CallbackContext):
+async def como_ganhar(update: Update, context: CallbackContext):
+    await update.message.reply_text(
+        "🎯 Você ganha pontos por:\n"
+        "• Presença inicial no grupo\n"
+        "• Ser promovido a pontuador (500 pts)\n"
+        "• Receber pontuações de outros usuários\n\n"
+        "Use /meus_pontos para ver seu total!"
+    )
+
+
+async def Atribuir_pontos(update: Update, context: CallbackContext):
     chamador = update.effective_user.id
     reg = obter_usuario(chamador)
-    if not reg['is_pontuador']:
-        return update.message.reply_text("🔒 Sem permissão para pontuar.")
-
+    if not reg or not reg['is_pontuador']:
+        return await update.message.reply_text("🔒 Sem permissão para pontuar.")
     args = context.args
     if len(args) < 2:
-        return update.message.reply_text("Uso: /pontuar <user_id> <pontos> [motivo]")
-
+        return await update.message.reply_text("Uso: /pontuar <user_id> <pontos> [motivo]")
     try:
         alvo_id = int(args[0]); pts = int(args[1])
     except ValueError:
-        return update.message.reply_text("IDs e pontos devem ser números.")
-
-    motivo = ' '.join(args[2:]) if len(args)>2 else None
+        return await update.message.reply_text("IDs e pontos devem ser números.")
+    motivo = ' '.join(args[2:]) if len(args) > 2 else None
     if not obter_usuario(alvo_id):
-        return update.message.reply_text("Usuário não encontrado.")
+        return await update.message.reply_text("Usuário não encontrado.")
+    atualizar_pontos(alvo_id, pts, motivo, context.bot)
+    await update.message.reply_text(f"✅ Atribuídos {pts} pontos ao usuário {alvo_id}.")
 
-    novos = atualizar_pontos(alvo_id, pts, motivo, context.bot)
-    update.message.reply_text(f"✅ Atribuídos {pts} pontos ao usuário {alvo_id}.")
 
-
-def comando_adicionar_pontuador(update: Update, context: CallbackContext):
+async def adicionar_pontuador(update: Update, context: CallbackContext):
     chamador = update.effective_user.id
     reg = obter_usuario(chamador)
-    if chamador!=ID_ADMIN and not reg['is_pontuador']:
-        return update.message.reply_text("🔒 Sem permissão.")
+    if chamador != ID_ADMIN and not reg['is_pontuador']:
+        return await update.message.reply_text("🔒 Sem permissão.")
     try:
         novo = int(context.args[0])
     except:
-        return update.message.reply_text("Uso: /add_pontuador <user_id>")
+        return await update.message.reply_text("Uso: /add_pontuador <user_id>")
     adicionar_usuario(novo, None)
     with obter_conexao() as conn:
         with conn.cursor() as cur:
-            cur.execute("UPDATE usuarios SET is_pontuador=TRUE WHERE user_id=%s",(novo,))
+            cur.execute("UPDATE usuarios SET is_pontuador=TRUE WHERE user_id=%s", (novo,))
             conn.commit()
-    update.message.reply_text(f"✅ Usuário {novo} virou pontuador.")
+    await update.message.reply_text(f"✅ Usuário {novo} virou pontuador.")
 
 
-def comando_historico(update: Update, context: CallbackContext):
+async def historico(update: Update, context: CallbackContext):
     user = update.effective_user
     with obter_conexao() as conn:
         with conn.cursor() as cur:
@@ -300,48 +517,49 @@ def comando_historico(update: Update, context: CallbackContext):
             )
             rows = cur.fetchall()
     lines = [f"{r['data'].strftime('%d/%m %H:%M')}: {r['pontos']} pts - {r['motivo']}" for r in rows]
-    update.message.reply_text("🗒️ Seu histórico:\n" + "\n".join(lines))
+    await update.message.reply_text("🗒️ Seu histórico:\n" + "\n".join(lines))
 
 
-def comando_ranking_top10(update: Update, context: CallbackContext):
+async def ranking_top10(update: Update, context: CallbackContext):
     with obter_conexao() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT username,pontos FROM usuarios ORDER BY pontos DESC LIMIT 10")
             top = cur.fetchall()
-    text = "🏅 Top 10 de pontos:\n" + "\n".join([f"{i+1}. {u['username']} – {u['pontos']} pts" for i,u in enumerate(top)])
-    update.message.reply_text(text)
+            text = "🏅 Top 10 de pontos:\n" + "\n".join(
+                [f"{i + 1}. {(u['username'] or 'Usuário')} – {u['pontos']} pts" for i, u in enumerate(top)]
+            )
+            await update.message.reply_text(text)
 
 
-def comando_zerar_pontos(update: Update, context: CallbackContext):
-    if update.effective_user.id!=ID_ADMIN:
-        return update.message.reply_text("🔒 Apenas admin pode usar.")
+async def zerar_pontos(update: Update, context: CallbackContext):
+    if update.effective_user.id != ID_ADMIN:
+        return await update.message.reply_text("🔒 Apenas admin pode usar.")
     try:
-        alvo=int(context.args[0])
+        alvo = int(context.args[0])
     except:
-        return update.message.reply_text("Uso: /zerar_pontos <user_id>")
+        return await update.message.reply_text("Uso: /zerar_pontos <user_id>")
     with obter_conexao() as conn:
         with conn.cursor() as cur:
-            cur.execute("UPDATE usuarios SET pontos=0 WHERE user_id=%s",(alvo,))
+            cur.execute("UPDATE usuarios SET pontos=0 WHERE user_id=%s", (alvo,))
             conn.commit()
-    update.message.reply_text(f"✅ Pontos de {alvo} zerados.")
+    await update.message.reply_text(f"✅ Pontos de {alvo} zerados.")
 
 
-def comando_remover_pontuador(update: Update, context: CallbackContext):
-    if update.effective_user.id!=ID_ADMIN:
-        return update.message.reply_text("🔒 Apenas admin pode usar.")
+async def pontuador(update: Update, context: CallbackContext):
+    if update.effective_user.id != ID_ADMIN:
+        return await update.message.reply_text("🔒 Apenas admin pode usar.")
     try:
-        alvo=int(context.args[0])
+        alvo = int(context.args[0])
     except:
-        return update.message.reply_text("Uso: /remover_pontuador <user_id>")
+        return await update.message.reply_text("Uso: /remover_pontuador <user_id>")
     with obter_conexao() as conn:
         with conn.cursor() as cur:
-            cur.execute("UPDATE usuarios SET is_pontuador=FALSE WHERE user_id=%s",(alvo,))
+            cur.execute("UPDATE usuarios SET is_pontuador=FALSE WHERE user_id=%s", (alvo,))
             conn.commit()
-    update.message.reply_text(f"✅ {alvo} não é mais pontuador.")
+    await update.message.reply_text(f"✅ {alvo} não é mais pontuador.")
 
-# --- Handler de presença ---
 
-def tratar_presenca(update: Update, context: CallbackContext):
+async def tratar_presenca(update: Update, context: CallbackContext):
     user = update.effective_user
     adicionar_usuario(user.id, user.username)
     reg = obter_usuario(user.id)
@@ -349,45 +567,68 @@ def tratar_presenca(update: Update, context: CallbackContext):
         atualizar_pontos(user.id, 1, 'Presença inicial', context.bot)
         with obter_conexao() as conn:
             with conn.cursor() as cur:
-                cur.execute("UPDATE usuarios SET visto=TRUE WHERE user_id=%s",(user.id,))
+                cur.execute("UPDATE usuarios SET visto=TRUE WHERE user_id=%s", (user.id,))
                 conn.commit()
-        update.message.reply_text("👋 +1 ponto por participar!")
+        await update.message.reply_text("👋 +1 ponto por participar!")
 
-def como_ganhar(update: Update, context: CallbackContext):
-    update.message.reply_text(
-        "🎯 Você ganha pontos por:\n"
-        "• Presença inicial (/start ou primeira mensagem no grupo)\n"
-        "• Ser pontuador (500 pts)\n"
-        "• Receber pontuações de outros\n"
-        "\nUse /meus_pontos para ver seu total!"
-    )
 
 # --- Inicialização do bot ---
-
 if __name__ == '__main__':
-    inicializar_bd()
-    updater = Updater(TOKEN)
-    dp = updater.dispatcher
+    init_db()
+    logger.info(f"✅ Banco inicializado. BOT_TOKEN está definido? {'Sim' if BOT_TOKEN else 'Não'}")
 
-    dp.add_handler(MessageHandler(filters.all, checar_bloqueio), group=0)
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .post_init(setup_bot_description)
+        .post_init(setup_commands)
+        .build()
+    )
 
-    # Comandos básicos
-    dp.add_handler(CommandHandler('start', comando_iniciar))
-    dp.add_handler(CommandHandler('meus_pontos', meus_pontos))
-    dp.add_handler(CommandHandler('como_ganhar', como_ganhar))
+    # middleware de bloqueio e outros handlers registrados abaixo
+    app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('meus_pontos', meus_pontos))
+    app.add_handler(CommandHandler('como_ganhar', como_ganhar))
 
     # Administração e pontuação
-    dp.add_handler(CommandHandler('pontuar', comando_pontuar))
-    dp.add_handler(CommandHandler('add_pontuador', comando_adicionar_pontuador))
-    dp.add_handler(CommandHandler('historico', comando_historico))
-    dp.add_handler(CommandHandler('ranking_top10', comando_ranking_top10))
-    dp.add_handler(CommandHandler('zerar_pontos', comando_zerar_pontos))
-    dp.add_handler(CommandHandler('remover_pontuador', comando_remover_pontuador))
-    dp.add_handler(CommandHandler('bloquear', comando_bloquear))
-    dp.add_handler(CommandHandler('desbloquear', comando_desbloquear))
+    app.add_handler(CommandHandler('pontuar', Atribuir_pontos))
+    app.add_handler(CommandHandler('add_pontuador', adicionar_pontuador))
+    app.add_handler(CommandHandler('historico', historico))
+    app.add_handler(CommandHandler('ranking_top10', ranking_top10))
+    app.add_handler(CommandHandler('zerar_pontos', zerar_pontos))
+    app.add_handler(CommandHandler('remover_pontuador', pontuador))
+    app.add_handler(CommandHandler('bloquear', bloquear_usuario))
+    app.add_handler(CommandHandler('desbloquear', desbloquear_usuario))
+    app.add_handler(CommandHandler('adapproibida', add_palavra_proibida))
+    app.add_handler(CommandHandler('delproibida', del_palavra_proibida))
+    app.add_handler(CommandHandler('listaproibida', listar_palavras_proibidas))
+
+    # Fluxo de admin
+    admin_handler = ConversationHandler(
+        entry_points=[CommandHandler('admin', iniciar_admin)],
+        states={
+            AGUARDANDO_SENHA: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, tratar_senha)
+            ],
+        },
+        fallbacks=[]
+    )
+    app.add_handler(admin_handler)
+
+
+    # Conversa de suporte
+    suporte_handler = ConversationHandler(
+        entry_points=[CommandHandler('suporte', suporte)],
+        states={ESPERANDO_SUPORTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_suporte)]},
+        fallbacks=[CommandHandler('cancelar', cancelar)]
+    )
+    app.add_handler(suporte_handler)
 
     # Presença
-    dp.add_handler(MessageHandler(filters.all & filters.chat_type.groups, tratar_presenca))
+    app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
 
-    updater.start_polling()
-    updater.idle()
+print("🔄 Iniciando polling...")  # <-- mensagem será exibida no console
+try:
+    app.run_polling()
+except Exception as e:
+    logger.exception("❌ Erro durante run_polling")
