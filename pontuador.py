@@ -1,7 +1,6 @@
 import os
 import logging
 import sys
-import asyncio
 import asyncpg
 from telegram.ext import ApplicationHandlerStop
 from telegram import Update, Bot
@@ -25,7 +24,7 @@ if not BOT_TOKEN:
     sys.exit(1)
 
 DATABASE_URL = os.getenv('DATABASE_URL')
-ID_ADMIN = int(os.getenv('ID_ADMIN', '123456789'))
+ID_ADMIN = int(os.getenv('ID_ADMIN'))
 LIMIAR_PONTUADOR = 500
 NIVEIS_BRINDES = {1000: 'Brinde Nível 1', 2000: 'Brinde Nível 2'}
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
@@ -280,7 +279,7 @@ async def iniciar_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in ADMIN_IDS:
         context.user_data["is_admin"] = True
-        await update.message.reply_markdown(ADMIN_MENU)
+        await update.message.reply_text(ADMIN_MENU)
         return ConversationHandler.END
 
     await update.message.reply_text("🔒 Digite a senha de admin:")
@@ -289,7 +288,7 @@ async def iniciar_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def tratar_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text.strip() == str(ADMIN_PASSWORD):
         context.user_data["is_admin"] = True
-        await update.message.reply_markdown(ADMIN_MENU)
+        await update.message.reply_text(ADMIN_MENU)
     else:
         await update.message.reply_text("❌ Senha incorreta. Acesso negado.")
     return ConversationHandler.END
@@ -490,10 +489,13 @@ async def meus_pontos(update: Update, context: CallbackContext):
 
 async def como_ganhar(update: Update, context: CallbackContext):
     await update.message.reply_text(
-        "🎯 Você ganha pontos por:\n"
-        "• Presença inicial no grupo\n"
-        "• Ser promovido a pontuador (500 pts)\n"
-        "• Receber pontuações de outros usuários\n\n"
+        "🎯 Você Pode Ganha Pontos Por:\n\n"
+        "• Compras por ID em videos.\n"
+        "• Até 1 comentário diario em grupos\n"
+        "• Indicar links de lives com moedas\n"
+        "• Receber pontuações de outros usuários por ajuda\n"
+        "• Receber pontuações por convites ⓘ\n"
+        "• Mais em Breve. \n\n"
         "Use /meus_pontos para ver seu total!"
     )
 
