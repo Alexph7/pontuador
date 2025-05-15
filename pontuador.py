@@ -264,7 +264,7 @@ async def setup_commands(app):
 
 ADMIN_MENU = (
     "🔧 *Menu Admin* 🔧\n\n"
-    "/pontuar – Atribuir pontos a um usuário\n"
+    "/add_pontos – Atribuir pontos a um usuário\n"
     "/add_pontuador – Tornar usuário pontuador\n"
     "/zerar_pontos – Zerar pontos\n"
     "/remover_pontuador – Remover permissão de pontuador\n"
@@ -500,15 +500,15 @@ async def como_ganhar(update: Update, context: CallbackContext):
     )
 
 
-async def Atribuir_pontos(update: Update, context: CallbackContext):
+async def add_pontos(update: Update, context: CallbackContext):
     chamador = update.effective_user.id
     reg = await obter_usuario(chamador)
     if not reg or not reg['is_pontuador']:
-        return await update.message.reply_text("🔒 Sem permissão para pontuar.")
+        return await update.message.reply_text("🔒 Sem permissão.")
 
     args = context.args
     if len(args) < 2:
-        return await update.message.reply_text("Uso: /pontuar <user_id> <pontos> [motivo]")
+        return await update.message.reply_text("Uso: /add_pontos <user_id> <pontos> [motivo]")
 
     try:
         alvo_id = int(args[0])
@@ -655,7 +655,7 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('como_ganhar', como_ganhar))
 
     # Administração e pontuação
-    app.add_handler(CommandHandler('pontuar', Atribuir_pontos))
+    app.add_handler(CommandHandler('add_pontos', add_pontos))
     app.add_handler(CommandHandler('add_pontuador', adicionar_pontuador))
     app.add_handler(CommandHandler('historico', historico))
     app.add_handler(CommandHandler('ranking_top10', ranking_top10))
