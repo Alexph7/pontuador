@@ -471,7 +471,7 @@ async def cancelar_suporte(update: Update, context: CallbackContext):
 # Handler para /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 Olá! Bem-vindo ao Bot de Pontuação da Vitrine.\n\n"
+        "🤖 Olá! Bem-vindo ao Bot de Pontuação da @cupomnavitrine.\n\n"
         "•/meus_pontos - Ver seus pontos\n"
         "•/rank_top10 - Ver o ranking geral\n"
         "•/rank_top10q - Ver o ranking 15 dias\n"
@@ -485,9 +485,13 @@ async def meus_pontos(update: Update, context: CallbackContext):
     user = update.effective_user
     await adicionar_usuario_db(user.id, user.username)
     u = await obter_usuario_db(user.id)
-    await update.message.reply_text(
-        f"Você tem {u['pontos']} pontos (Nível {u['nivel_atingido']})."
-    )
+
+    if u:
+        await update.message.reply_text(
+            f"Você tem {u['pontos']} pontos (Nível {u['nivel_atingido']})."
+        )
+    else:
+        await update.message.reply_text("Não foi possível encontrar seus dados.")
 
 
 async def como_ganhar(update: Update, context: CallbackContext):
