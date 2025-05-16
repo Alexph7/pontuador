@@ -491,7 +491,7 @@ async def meus_pontos(update: Update, context: CallbackContext):
             f"Você tem {u['pontos']} pontos (Nível {u['nivel_atingido']})."
         )
     else:
-        await update.message.reply_text("Não foi possível encontrar seus dados.")
+        await update.message.reply_text("Não foi possível encontrar seus dados. conte o suporte")
 
 
 async def como_ganhar(update: Update, context: CallbackContext):
