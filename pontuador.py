@@ -1,6 +1,7 @@
 import os
 import logging
 import sys
+import logging
 import asyncpg
 from telegram.ext import ApplicationHandlerStop
 from telegram import Update, Bot
@@ -40,7 +41,9 @@ else:
     ADMIN_IDS = []
 
 # --- Estados de conversa ---
-ESPERANDO_SUPORTE, AGUARDANDO_SENHA = range(2)
+ADMIN_SENHA, ESPERANDO_SUPORTE, ADD_PONTOS_POR_ID, ADD_PONTOS_QTD, ADD_PONTOS_MOTIVO, \
+DEL_PONTOS_ID, DEL_PONTOS_QTD, DEL_PONTOS_MOTIVO, REMOVER_PONTUADOR_ID, BLOQUEAR_ID, \
+DESBLOQUEAR_ID, ADD_PALAVRA_PROIBIDA, DEL_PALAVRA_PROIBIDA = range(13)
 
 
 async def init_db_pool():
@@ -83,7 +86,7 @@ async def init_db_pool():
         """)
 
 # --- Helpers de usuário (asyncpg) ---
-async def adicionar_usuario(user_id: int, username: str):
+async def adicionar_usuario_db(user_id: int, username: str):
     """
     Insere ou atualiza um usuário na tabela 'usuarios'.
     """
@@ -97,7 +100,7 @@ async def adicionar_usuario(user_id: int, username: str):
         user_id, username
     )
 
-async def obter_usuario(user_id: int) -> asyncpg.Record | None:
+async def obter_usuario_db(user_id: int) -> asyncpg.Record | None:
     """
     Retorna um registro de usuário como asyncpg.Record ou None.
     """
@@ -106,7 +109,7 @@ async def obter_usuario(user_id: int) -> asyncpg.Record | None:
         user_id
     )
 
-async def registrar_historico(user_id: int, pontos: int, motivo: str | None = None):
+async def registrar_historico_db(user_id: int, pontos: int, motivo: str | None = None):
     """
     Insere um registro de pontos no histórico.
     """
@@ -125,7 +128,7 @@ async def atualizar_pontos(
     bot: Bot = None
 ) -> int | None:
     # Busca usuário (async)
-    usuario = await obter_usuario(user_id)
+    usuario = await obter_usuario_db(user_id)
     if not usuario:
         return None
 
@@ -135,7 +138,7 @@ async def atualizar_pontos(
     nivel = usuario['nivel_atingido']
 
     # Registra histórico (async)
-    await registrar_historico(user_id, delta, motivo)
+    await registrar_historico_db(user_id, delta, motivo)
 
     # Verifica se virou pontuador
     becomes_pontuador = False
@@ -159,7 +162,7 @@ async def atualizar_pontos(
             bot: Bot | None = None
     ) -> int | None:
         # Busca usuário (async)
-        usuario = await obter_usuario(user_id)
+        usuario = await obter_usuario_db(user_id)
         if not usuario:
             return None
 
@@ -169,7 +172,7 @@ async def atualizar_pontos(
         nivel = usuario['nivel_atingido']
 
         # Registra histórico (async)
-        await registrar_historico(user_id, delta, motivo)
+        await registrar_historico_db(user_id, delta, motivo)
 
         # Verifica se virou pontuador
         becomes_pontuador = False
@@ -234,6 +237,7 @@ async def setup_bot_description(app):
 async def setup_commands(app):
     try:
         comandos_basicos = [
+            BotCommand("start", "Iniciar Bot"),
             BotCommand("meus_pontos", "Ver sua pontuação e nível"),
             BotCommand("ranking_top10", "Top 10 de usuários por pontos"),
             BotCommand("historico", "Mostrar seu histórico de pontos"),
@@ -265,8 +269,7 @@ async def setup_commands(app):
 ADMIN_MENU = (
     "🔧 *Menu Admin* 🔧\n\n"
     "/add_pontos – Atribuir pontos a um usuário\n"
-    "/add_pontuador – Tornar usuário pontuador\n"
-    "/zerar_pontos – Zerar pontos\n"
+    "/del_pontos – Atribuir pontos a um usuário\n"
     "/remover_pontuador – Remover permissão de pontuador\n"
     "/bloquear – Bloquear usuário\n"
     "/desbloquear – Desbloquear usuário\n"
@@ -283,7 +286,7 @@ async def iniciar_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     await update.message.reply_text("🔒 Digite a senha de admin:")
-    return AGUARDANDO_SENHA
+    return ADMIN_SENHA
 
 async def tratar_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text.strip() == str(ADMIN_PASSWORD):
@@ -460,7 +463,7 @@ async def receber_suporte(update: Update, context: CallbackContext):
     return ConversationHandler.END
 
 
-async def cancelar(update: Update, context: CallbackContext):
+async def cancelar_suporte(update: Update, context: CallbackContext):
     await update.message.reply_text("❌ Suporte cancelado.")
     return ConversationHandler.END
 
@@ -480,8 +483,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def meus_pontos(update: Update, context: CallbackContext):
     user = update.effective_user
-    await adicionar_usuario(user.id, user.username)
-    u = await obter_usuario(user.id)
+    await adicionar_usuario_db(user.id, user.username)
+    u = await obter_usuario_db(user.id)
     await update.message.reply_text(
         f"Você tem {u['pontos']} pontos (Nível {u['nivel_atingido']})."
     )
@@ -500,33 +503,87 @@ async def como_ganhar(update: Update, context: CallbackContext):
     )
 
 
-async def add_pontos(update: Update, context: CallbackContext):
-    chamador = update.effective_user.id
-    reg = await obter_usuario(chamador)
-    if not reg or not reg['is_pontuador']:
-        return await update.message.reply_text("🔒 Sem permissão.")
+async def add_pontos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+        Inicia o fluxo de atribuição de pontos.
+        Verifica se o usuário possui permissão temporária (senha válida) e
+        pergunta qual é o user_id que receberá pontos.
+        """
+    # Verifica permissão temporária
+    if not context.user_data.get("is_admin"):
+        return await update.message.reply_text("🔒 Você precisa autenticar como admin primeiro.")
+    # Inicia a conversa
+    await update.message.reply_text("📋 Atribuir pontos: primeiro, qual é o user_id?")
+    return ADD_PONTOS_POR_ID
 
-    args = context.args
-    if len(args) < 2:
-        return await update.message.reply_text("Uso: /add_pontos <user_id> <pontos> [motivo]")
+async def add_pontos_IDuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+        Recebe o ID do usuário destinatário.
+        Valida se é um número inteiro. Se válido, armazena em user_data
+        e pergunta a quantidade de pontos.
+        """
+    text = update.message.text.strip()
+    if not text.isdigit():
+        return await update.message.reply_text("❗️ ID inválido. Digite somente números para o user_id.")
+    context.user_data["add_pt_id"] = int(text)
+    await update.message.reply_text("✏️ Quantos pontos você quer dar?")
+    return ADD_PONTOS_POR_ID
 
-    try:
-        alvo_id = int(args[0])
-        pts = int(args[1])
-    except ValueError:
-        return await update.message.reply_text("IDs e pontos devem ser números.")
+async def add_pontos_quantidade(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+        Recebe a quantidade de pontos a ser atribuída.
+        Valida se é número inteiro. Se válido, armazena em user_data
+        e pergunta o motivo da atribuição.
+        """
+    text = update.message.text.strip()
+    if not text.isdigit():
+        return await update.message.reply_text("❗️ Valor inválido. Digite somente números para os pontos.")
+    context.user_data["add_pt_value"] = int(text)
+    await update.message.reply_text("📝 Por fim, qual o motivo para registrar no histórico?")
+    return ADD_PONTOS_POR_ID
 
-    motivo = ' '.join(args[2:]) if len(args) > 2 else None
-    if not await obter_usuario(alvo_id):
-        return await update.message.reply_text("Usuário não encontrado.")
+async def add_pontos_motivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+        Recebe o motivo da atribuição de pontos.
+        Valida se não está vazio. Se válido, recupera todos os dados de user_data,
+        verifica a existência do usuário, faz a atualização cumulativa no banco
+        e envia a confirmação. Encerra a conversa.
+        """
+    motivo = update.message.text.strip()
+    if not motivo:
+        return await update.message.reply_text("❗️ Motivo não pode ficar em branco. Digite um texto.")
+    context.user_data["add_pt_reason"] = motivo
 
-    await atualizar_pontos(alvo_id, pts, motivo, context.bot)
-    await update.message.reply_text(f"✅ Atribuídos {pts} pontos ao usuário {alvo_id}.")
+    # Todos os dados coletados, processa a atualização
+    alvo_id = context.user_data.pop("add_pt_id")
+    pontos  = context.user_data.pop("add_pt_valOR")
+    motivo  = context.user_data.pop("add_pt_motivo")
+
+    usuario = await obter_usuario_db(alvo_id)
+    if not usuario:
+        return await update.message.reply_text("❌ Usuário não encontrado. Cancelando operação.")
+
+    novo_total = await atualizar_pontos(alvo_id, pontos, motivo, context.bot)
+    await update.message.reply_text(
+        f"✅ {pontos} pts atribuídos a {alvo_id}.\n"
+        f"Motivo: {motivo}\n"
+        f"Total agora: {novo_total} pts."
+    )
+    return ConversationHandler.END
+
+async def add_pontos_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+      Handler de fallback para cancelar o fluxo de atribuição de pontos.
+      Envia mensagem de cancelamento e encerra a conversa.
+      """
+    await update.message.reply_text("❌ Operação cancelada.")
+    return ConversationHandler.END
+
 
 
 async def adicionar_pontuador(update: Update, context: CallbackContext):
     chamador = update.effective_user.id
-    reg = await obter_usuario(chamador)
+    reg = await obter_usuario_db(chamador)
     if chamador != ID_ADMIN and not reg['is_pontuador']:
         return await update.message.reply_text("🔒 Sem permissão.")
 
@@ -537,7 +594,7 @@ async def adicionar_pontuador(update: Update, context: CallbackContext):
     except ValueError:
         return await update.message.reply_text("Uso: /add_pontuador <user_id>")
 
-    await adicionar_usuario(novo, None)
+    await adicionar_usuario_db(novo, None)
     await pool.execute(
         "UPDATE usuarios SET is_pontuador = TRUE WHERE user_id = $1",
         novo
@@ -553,7 +610,7 @@ async def historico(update: Update, context: CallbackContext):
           FROM historico_pontos
          WHERE user_id = $1
       ORDER BY data DESC
-         LIMIT 10
+         LIMIT 25
         """,
         user.id
     )
@@ -614,8 +671,8 @@ async def pontuador(update: Update, context: CallbackContext):
 async def tratar_presenca(update: Update, context: CallbackContext):
     user = update.effective_user
     # garante existência e recupera dados
-    await adicionar_usuario(user.id, user.username)
-    reg = await obter_usuario(user.id)
+    await adicionar_usuario_db(user.id, user.username)
+    reg = await obter_usuario_db(user.id)
 
     if not reg['visto']:
         # pontua presença
@@ -627,12 +684,109 @@ async def tratar_presenca(update: Update, context: CallbackContext):
         )
         await update.message.reply_text("👋 +1 ponto por participar!")
 
+async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
+    # Limpa tudo que já havia sido armazenado
+    conText.user_data.clear()
+    await update.message.reply_text(
+        "❌ Operação cancelada. Nenhum dado foi salvo."
+    )
+    return ConversationHandler.END
+
 
 async def on_startup(app):
     # será executado no mesmo loop do Application
     await init_db_pool()
     logger.info("✅ Pool asyncpg inicializado e tabelas garantidas.")
 
+
+main_conv = ConversationHandler(
+    entry_points=[
+        CommandHandler("iniciar_admin", iniciar_admin),
+        CommandHandler("add_pontos", add_pontos),
+        # CommandHandler("remover_pontuador", remover_pontuador),
+        # CommandHandler("bloquear", bloquear),
+        # CommandHandler("add_admin", add_admin),
+        # CommandHandler("remover_admin", remover_admin),
+        # CommandHandler("bloquear", bloquear),
+        # CommandHandler("desbloquear", desbloquear),
+        CommandHandler("add_palavra_proibida", add_palavra_proibida),
+        CommandHandler("del_palavra_proibida", del_palavra_proibida),
+        # CommandHandler("listaproibida", listaproibida)
+    ],
+    states={
+        # SENHA ADMIN (exemplo de validação inicial)
+        ADMIN_SENHA: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, iniciar_admin),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        ],
+
+        # # SUPORTE (caso você use suporte)
+        # ESPERANDO_SUPORTE: [
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, tratar_mensagem_suporte),
+        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        # ],
+        #
+        # # /add_pontos
+        # ADD_PONTOS_POR_ID: [
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_id_add_pontos),
+        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        # ],
+        # ADD_PONTOS_QTD: [
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_qtd_add_pontos),
+        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        # ],
+        # ADD_PONTOS_MOTIVO: [
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_motivo_add_pontos),
+        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        # ],
+        #
+        # # /del_pontos
+        # DEL_PONTOS_ID: [
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_id_del_pontos),
+        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        # ],
+        # DEL_PONTOS_QTD: [
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_qtd_del_pontos),
+        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        # ],
+        # DEL_PONTOS_MOTIVO: [
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_motivo_del_pontos),
+        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        # ],
+        #
+        # # /remover_pontuador
+        # REMOVER_PONTUADOR_ID: [
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_id_remover_pontuador),
+        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        # ],
+        #
+        # # /bloquear
+        # BLOQUEAR_ID: [
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_id_bloquear),
+        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        # ],
+        #
+        # # /desbloquear
+        # DESBLOQUEAR_ID: [
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_id_desbloquear),
+        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        # ],
+        #
+        # # /add_palavra_proibida
+        # ADD_PALAVRA_PROIBIDA: [
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_palavras_proibidas_add),
+        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        # ],
+        #
+        # # /del_palavra_proibida
+        # DEL_PALAVRA_PROIBIDA: [
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_palavras_proibidas_del),
+        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        # ],
+    },
+    fallbacks=[CommandHandler("cancelar", cancelar)],
+        allow_reentry=True,
+)
 
 # --- Inicialização do bot ---
 if __name__ == '__main__':
@@ -650,40 +804,15 @@ if __name__ == '__main__':
         .post_init(setup_commands)
         .build()
     )
-    app.add_handler(CommandHandler('start', start))
+    app.add_handler(main_conv)
+
+    app.add_handler(CommandHandler('start', start, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('meus_pontos', meus_pontos))
     app.add_handler(CommandHandler('como_ganhar', como_ganhar))
-
-    # Administração e pontuação
-    app.add_handler(CommandHandler('add_pontos', add_pontos))
-    app.add_handler(CommandHandler('add_pontuador', adicionar_pontuador))
     app.add_handler(CommandHandler('historico', historico))
     app.add_handler(CommandHandler('ranking_top10', ranking_top10))
-    app.add_handler(CommandHandler('zerar_pontos', zerar_pontos))
-    app.add_handler(CommandHandler('remover_pontuador', pontuador))
-    app.add_handler(CommandHandler('bloquear', bloquear_usuario))
-    app.add_handler(CommandHandler('desbloquear', desbloquear_usuario))
-    app.add_handler(CommandHandler('adapproibida', add_palavra_proibida))
-    app.add_handler(CommandHandler('delproibida', del_palavra_proibida))
-    app.add_handler(CommandHandler('listaproibida', listar_palavras_proibidas))
 
-    # Fluxo de admin
-    admin_handler = ConversationHandler(
-        entry_points=[CommandHandler('admin', iniciar_admin)],
-        states={AGUARDANDO_SENHA: [MessageHandler(filters.TEXT & ~filters.COMMAND, tratar_senha)]},
-        fallbacks=[]
-    )
-    app.add_handler(admin_handler)
-
-    # Conversa de suporte
-    suporte_handler = ConversationHandler(
-        entry_points=[CommandHandler('suporte', suporte)],
-        states={ESPERANDO_SUPORTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_suporte)]},
-        fallbacks=[CommandHandler('cancelar', cancelar)]
-    )
-    app.add_handler(suporte_handler)
-
-    # Presença em grupos
+        # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
 
     logger.info("🔄 Iniciando polling...")
