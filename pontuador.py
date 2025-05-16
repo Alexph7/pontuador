@@ -4,7 +4,13 @@ import sys
 import asyncpg
 from asyncpg.exceptions import PostgresError, UniqueViolationError
 import logging
-import asyncpg
+import asyncio
+import csv
+import io
+import math
+import logging
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from telegram.ext import CallbackQueryHandler
 from telegram.ext import ApplicationHandlerStop
 from telegram import Update, Bot
 from dotenv import load_dotenv
@@ -48,6 +54,9 @@ else:
 ADMIN_SENHA, ESPERANDO_SUPORTE, ADD_PONTOS_POR_ID, ADD_PONTOS_QTD, ADD_PONTOS_MOTIVO, \
 DEL_PONTOS_ID, DEL_PONTOS_QTD, DEL_PONTOS_MOTIVO, REMOVER_PONTUADOR_ID, BLOQUEAR_ID, \
 DESBLOQUEAR_ID, ADD_PALAVRA_PROIBIDA, DEL_PALAVRA_PROIBIDA = range(13)
+
+TEMPO_LIMITE_BUSCA = 5          # Tempo máximo (em segundos) para consulta
+PAGE_SIZE = 20             # Número de usuários por página
 
 
 async def init_db_pool():
@@ -187,7 +196,7 @@ async def total_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         total = await asyncio.wait_for(
             pool.fetchval("SELECT COUNT(*) FROM usuarios"),
-            timeout=FETCH_TIMEOUT
+            timeout=TEMPO_LIMITE_BUSCA
         )
     except asyncio.TimeoutError:
         await update.message.reply_text(
@@ -360,15 +369,20 @@ async def setup_commands(app):
 ADMIN_MENU = (
     "🔧 *Menu Admin* 🔧\n\n"
     "/add_pontos – Atribuir pontos a um usuário\n"
-    "/del_pontos – Atribuir pontos a um usuário\n"
-    "/remover_pontuador – Remover permissão de pontuador\n"
+    "/del_pontos – remover pontos de um usuário\n"
+    "/add_admin – adicionar novo admin\n"
+    "/rem_admin – remover admin\n"
+    "/rem_pontuador – Remover permissão de pontuador\n"
     "/bloquear – Bloquear usuário\n"
     "/desbloquear – Desbloquear usuário\n"
-    "/historico_usuario – ver historico de nomes do usuário\n"
+    "/historico_usuario – historico de nomes do usuário\n"
+    "/listar_usuarios – lista de usuarios cadastrados\n"
+    "/total_usuarios – quantidade total de usuarios cadastrados\n"
     "/adapproibida – Adicionar palavra proibida\n"
     "/delproibida – Remover palavra proibida\n"
     "/listaproibida – Listar palavras proibidas\n"
 )
+
 
 async def iniciar_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -920,6 +934,144 @@ async def historico_usuario(update: Update, context: CallbackContext):
     # 7) Log de acesso para auditoria
     logger.info("Admin %s consultou histórico do user %s (page %d)", requester_id, target_id, page)
 
+async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /listar_usuarios [page | nome <prefixo> | id <prefixo>]
+    Mostra lista de usuários com paginação e filtros opcionais.
+    - page: número da página (padrão 1)
+    - nome <prefixo>: filtra names começando com prefixo
+    - id <prefixo>: filtra IDs começando com prefixo
+    Somente ADMINS podem executar.
+    """
+    user_id = update.effective_user.id
+    if user_id not in ADMINS:
+        return await update.message.reply_text("❌ Você não tem permissão para isso.")
+
+    args = context.args or []
+    page = 1
+    filtro_sql = ""
+    filtro_args = []
+
+    # Interpretar subcomandos de filtro
+    if args:
+        if args[0].isdigit():
+            page = max(1, int(args[0]))
+        elif args[0].lower() == 'nome' and len(args) > 1:
+            prefix = args[1]
+            filtro_sql = "WHERE first_name ILIKE $1"
+            filtro_args = [f"{prefix}%"]
+        elif args[0].lower() == 'id' and len(args) > 1:
+            prefix = args[1]
+            filtro_sql = "WHERE CAST(user_id AS TEXT) LIKE $1"
+            filtro_args = [f"{prefix}%"]
+
+    try:
+        # Conta total de registros para paginação
+        total = await asyncio.wait_for(
+            pool.fetchval(f"SELECT COUNT(*) FROM usuarios {filtro_sql}", *filtro_args),
+            timeout=TEMPO_LIMITE_BUSCA
+        )
+    except Exception as e:
+        logger.error("Erro ao contar usuários: %s", e)
+        return await update.message.reply_text("❌ Erro ao acessar o banco.")
+
+    total_pages = max(1, math.ceil(total / PAGE_SIZE))
+    if page > total_pages:
+        return await update.message.reply_text(
+            f"ℹ️ Página {page} não existe. Só até {total_pages}."
+        )
+
+    offset = (page - 1) * PAGE_SIZE
+    query = (
+        f"SELECT user_id, first_name FROM usuarios {filtro_sql} "
+        f"ORDER BY user_id LIMIT $1 OFFSET $2"
+    )
+
+    try:
+        rows = await asyncio.wait_for(
+            pool.fetch(query, *(filtro_args + [PAGE_SIZE, offset])),
+            timeout=TEMPO_LIMITE_BUSCA
+        )
+    except asyncio.TimeoutError:
+        return await update.message.reply_text(
+            "❌ A consulta demorou demais. Tente novamente mais tarde."
+        )
+    except Exception as e:
+        logger.error("Erro ao listar usuários: %s", e)
+        return await update.message.reply_text(
+            "❌ Erro ao acessar o banco. Tente novamente mais tarde."
+        )
+
+    if not rows:
+        return await update.message.reply_text("ℹ️ Nenhum usuário encontrado.")
+
+    # Monta mensagem e botões de navegação
+    header = f"🗒️ Usuários (página {page}/{total_pages}, total {total}):"
+    lines = [header]
+    for r in rows:
+        nome = r['first_name'] or '<sem nome>'
+        lines.append(f"• `{r['user_id']}` — {nome}")
+    text = "\n".join(lines)
+
+    # Inline keyboard para navegar páginas
+    buttons = []
+    if page > 1:
+        buttons.append(InlineKeyboardButton('◀️ Anterior', callback_data=f"usuarios|{page-1}|{' '.join(args)}"))
+    if page < total_pages:
+        buttons.append(InlineKeyboardButton('Próxima ▶️', callback_data=f"usuarios|{page+1}|{' '.join(args)}"))
+    keyboard = InlineKeyboardMarkup([buttons]) if buttons else None
+
+    await update.message.reply_text(text, parse_mode='MarkdownV2', reply_markup=keyboard)
+
+
+async def callback_listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Callback para navegação da listagem de usuários.
+    """
+    query = update.callback_query
+    await query.answer()
+    data = query.data.split('|')
+    _, page_str, args_str = data
+    # Reconstrói contexto e chama listar_usuarios
+    context.args = args_str.split() if args_str else []
+    # Simula update.message para reaproveitar a função
+    return await listar_usuarios(query, context)
+
+
+async def exportar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /exportar_usuarios
+    Exporta todos os usuários em arquivo CSV.
+    Somente ADMINS podem executar.
+    """
+    user_id = update.effective_user.id
+    if user_id not in ADMINS:
+        return await update.message.reply_text("❌ Você não tem permissão para isso.")
+
+    try:
+        rows = await asyncio.wait_for(
+            pool.fetch("SELECT user_id, first_name FROM usuarios ORDER BY user_id"),
+            timeout=TEMPO_LIMITE_BUSCA
+        )
+    except Exception as e:
+        logger.error("Erro ao exportar usuários: %s", e)
+        return await update.message.reply_text("❌ Erro ao acessar o banco.")
+
+    if not rows:
+        return await update.message.reply_text("ℹ️ Nenhum usuário para exportar.")
+
+    # Cria CSV em memória
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(['user_id', 'first_name'])
+    for r in rows:
+        writer.writerow([r['user_id'], r['first_name'] or ''])
+    buffer.seek(0)
+
+    # Envia como arquivo
+    file = InputFile(buffer, filename='usuarios.csv')
+    await update.message.reply_document(document=file, filename='usuarios.csv')
+
 
 async def on_startup(app):
     # será executado no mesmo loop do Application
@@ -931,10 +1083,13 @@ main_conv = ConversationHandler(
     entry_points=[
         CommandHandler("iniciar_admin", iniciar_admin),
         CommandHandler("add_pontos", add_pontos),
-        # CommandHandler("remover_pontuador", remover_pontuador),
-        # CommandHandler("bloquear", bloquear),
+        # CommandHandler("del_pontos", del_pontos),
         # CommandHandler("add_admin", add_admin),
-        # CommandHandler("remover_admin", remover_admin),
+        # CommandHandler("rem_admin", rem_admin),
+        # CommandHandler("rem_pontuador", rem_pontuador),
+        # CommandHandler("historico_usuario", historico_usuario),
+        # CommandHandler("listar_usuarios", listar_usuarios),
+        # CommandHandler("total_usuarios", total_usuarios),
         # CommandHandler("bloquear", bloquear),
         # CommandHandler("desbloquear", desbloquear),
         CommandHandler("add_palavra_proibida", add_palavra_proibida),
@@ -1039,8 +1194,9 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('como_ganhar', como_ganhar))
     app.add_handler(CommandHandler('historico', historico))
     app.add_handler(CommandHandler('ranking_top10', ranking_top10))
+    #app.add_handler(CommandHandler('ranking_top10q', ranking_top10q))
 
-        # Presença em grupos
+    # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
 
     logger.info("🔄 Iniciando polling...")
