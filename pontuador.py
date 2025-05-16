@@ -472,11 +472,11 @@ async def cancelar_suporte(update: Update, context: CallbackContext):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 Olá! Bem-vindo ao Bot de Pontuação da Vitrine.\n\n"
-        "Aqui você pode:\n"
-        "• Ver seus pontos com /meus_pontos\n"
-        "• Conferir o ranking com /ranking_top10\n"
-        "• Ver seu histórico com /historico\n"
-        "• Saber como ganhar pontos com /como_ganhar\n\n"
+        "•/meus_pontos - Ver seus pontos\n"
+        "•/rank_top10 - Ver o ranking geral\n"
+        "•/rank_top10q - Ver o ranking 15 dias\n"
+        "•/historico - Ver seu histórico\n"
+        "•/como_ganhar - Saber como ganhar pontos\n\n"
         "Basta clicar em um comando ou digitá-lo na conversa. Vamos começar?"
     )
 
