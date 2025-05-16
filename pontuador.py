@@ -171,6 +171,40 @@ async def registrar_historico_db(user_id: int, pontos: int, motivo: str | None =
         user_id, pontos, motivo
     )
 
+async def total_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /total_usuarios
+    Retorna o número total de usuários cadastrados na tabela 'usuarios'.
+    Somente admins podem executar.
+    """
+    # 1) Verifica permissão
+    requester_id = update.effective_user.id
+    if requester_id not in ADMINS:
+        await update.message.reply_text("❌ Você não tem permissão para isso.")
+        return
+
+    # 2) Consulta ao banco com timeout
+    try:
+        total = await asyncio.wait_for(
+            pool.fetchval("SELECT COUNT(*) FROM usuarios"),
+            timeout=FETCH_TIMEOUT
+        )
+    except asyncio.TimeoutError:
+        await update.message.reply_text(
+            "❌ A consulta demorou demais. Tente novamente mais tarde."
+        )
+        return
+    except Exception as e:
+        logger.error("Erro ao contar usuários: %s", e)
+        await update.message.reply_text(
+            "❌ Erro ao acessar o banco. Tente novamente mais tarde."
+        )
+        return
+
+    # 3) Envia resultado
+    await update.message.reply_text(f"👥 Total de usuários cadastrados: {total}")
+
+
 async def atualizar_pontos(
     user_id: int,
     delta: int,
@@ -330,6 +364,7 @@ ADMIN_MENU = (
     "/remover_pontuador – Remover permissão de pontuador\n"
     "/bloquear – Bloquear usuário\n"
     "/desbloquear – Desbloquear usuário\n"
+    "/historico_usuario – ver historico de nomes do usuário\n"
     "/adapproibida – Adicionar palavra proibida\n"
     "/delproibida – Remover palavra proibida\n"
     "/listaproibida – Listar palavras proibidas\n"
@@ -525,16 +560,39 @@ async def cancelar_suporte(update: Update, context: CallbackContext):
     return ConversationHandler.END
 
 
+from telegram import Update
+from telegram.ext import ContextTypes
+import logging
+
+logger = logging.getLogger(__name__)
+
 # Handler para /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+
+    user_id = user.id
+    username = user.username or ""
+    first_name = user.first_name or ""
+
+    try:
+        await adicionar_usuario_db(user_id, username, first_name)
+        logger.info("Usuário registrado ou atualizado: %s (%s)", user_id, username)
+    except Exception as e:
+        logger.exception("Erro ao registrar usuário %s: %s", user_id, e)
+        await update.message.reply_text("❌ Ocorreu um erro ao registrar seu usuário. Tente novamente mais tarde.")
+        return
+
+    # Mensagem de boas-vindas
     await update.message.reply_text(
-        "🤖 Olá! Bem-vindo ao Bot de Pontuação da @cupomnavitrine.\n\n"
-        "•/meus_pontos - Ver seus pontos\n"
-        "•/rank_top10 - Ver o ranking geral\n"
-        "•/rank_top10q - Ver o ranking 15 dias\n"
-        "•/historico - Ver seu histórico\n"
-        "•/como_ganhar - Saber como ganhar pontos\n\n"
-        "Basta clicar em um comando ou digitá-lo na conversa. Vamos começar?"
+        "🤖 Olá! Bem-vindo ao *Bot de Pontuação* da @cupomnavitrine\\.\n\n"
+        "Você pode usar os comandos abaixo:\n\n"
+        "• /meus_pontos \\- Ver seus pontos\n"
+        "• /rank_top10 \\- Ver o ranking geral\n"
+        "• /rank_top10q \\- Ver o ranking 15 dias\n"
+        "• /historico \\- Ver seu histórico\n"
+        "• /como_ganhar \\- Saber como ganhar pontos\n\n"
+        "_Basta clicar em um comando ou digitá\\-lo na conversa_\\. Vamos começar?",
+        parse_mode="MarkdownV2"
     )
 
 
