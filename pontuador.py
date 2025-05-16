@@ -482,16 +482,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def meus_pontos(update: Update, context: CallbackContext):
+    """
+    Exibe ao usuário seus pontos e nível atual,
+    tratando possíveis falhas de conexão ao banco.
+    """
     user = update.effective_user
-    await adicionar_usuario_db(user.id, user.username)
-    u = await obter_usuario_db(user.id)
 
-    if u:
+    try:
+        # Tenta inserir ou atualizar o usuário
+        await adicionar_usuario_db(user.id, user.username)
+        # Tenta buscar os dados de pontos e nível
+        u = await obter_usuario_db(user.id)
+
+    except Exception as e:
+        # Aqui você pode usar logger.error(e) para registrar a stack
         await update.message.reply_text(
-            f"Você tem {u['pontos']} pontos (Nível {u['nivel_atingido']})."
+            "❌ Desculpe, tivemos um problema ao acessar as suas informações. Tente novamente mais tarde. se o problema persistir contate o suporte."
         )
-    else:
-        await update.message.reply_text("Não foi possível encontrar seus dados. conte o suporte")
+        return
+
+    # Se tudo ocorreu bem, respondemos normalmente
+    await update.message.reply_text(
+        f"🎉 Você tem {u['pontos']} pontos (Nível {u['nivel_atingido']})."
+    )
 
 
 async def como_ganhar(update: Update, context: CallbackContext):
