@@ -1,6 +1,8 @@
 import os
-import logging
+import re
 import sys
+import asyncpg
+from asyncpg.exceptions import PostgresError, UniqueViolationError
 import logging
 import asyncpg
 from telegram.ext import ApplicationHandlerStop
@@ -12,6 +14,8 @@ from telegram.ext import (
     CommandHandler, CallbackContext,
     MessageHandler, filters, ConversationHandler
 )
+
+
 pool: asyncpg.Pool | None = None
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,15 +34,15 @@ LIMIAR_PONTUADOR = 500
 NIVEIS_BRINDES = {1000: 'Brinde Nível 1', 2000: 'Brinde Nível 2'}
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 
-ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "")
-if ADMIN_IDS_STR:
+ADMIN_IDS = os.getenv("ADMIN_IDS", "")
+if ADMIN_IDS:
     try:
-        ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_STR.split(',') if x.strip()]
+        ADMINS = [int(x.strip()) for x in ADMIN_IDS.split(',') if x.strip()]
     except ValueError:
         logger.error("ADMIN_IDS deve conter apenas números separados por vírgula.")
-        ADMIN_IDS = []
+        ADMINS = []
 else:
-    ADMIN_IDS = []
+    ADMINS = []
 
 # --- Estados de conversa ---
 ADMIN_SENHA, ESPERANDO_SUPORTE, ADD_PONTOS_POR_ID, ADD_PONTOS_QTD, ADD_PONTOS_MOTIVO, \
@@ -86,19 +90,65 @@ async def init_db_pool():
         """)
 
 # --- Helpers de usuário (asyncpg) ---
-async def adicionar_usuario_db(user_id: int, username: str):
+async def adicionar_usuario_db(user_id: int, username: str, first_name: str) -> bool:
     """
-    Insere ou atualiza um usuário na tabela 'usuarios'.
+    Insere ou atualiza um usuário na tabela 'usuarios', registra mudanças
+    de username/first_name no histórico e retorna True em caso de sucesso,
+    False em caso de falha.
     """
-    await pool.execute(
-        """
-        INSERT INTO usuarios (user_id, username)
-        VALUES ($1, $2)
-        ON CONFLICT (user_id) DO UPDATE
-          SET username = EXCLUDED.username
-        """,
-        user_id, username
-    )
+    try:
+        async with pool.transaction():
+            # 1) Busca valores atuais
+            row = await pool.fetchrow(
+                "SELECT username, first_name FROM usuarios WHERE user_id = $1",
+                user_id
+            )
+
+            # 2) Insere ou atualiza condicionalmente
+            await pool.execute(
+                """
+                INSERT INTO usuarios (user_id, username, first_name)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (user_id) DO UPDATE
+                  SET username    = EXCLUDED.username,
+                      first_name  = EXCLUDED.first_name
+                  WHERE usuarios.username   IS DISTINCT FROM EXCLUDED.username
+                     OR usuarios.first_name IS DISTINCT FROM EXCLUDED.first_name
+                """,
+                user_id, username, first_name
+            )
+
+            # 3) Registra histórico de mudanças
+            if row:
+                if row["username"] != username:
+                    await pool.execute(
+                        """
+                        INSERT INTO usuario_history (user_id, campo, valor_antigo, valor_novo)
+                        VALUES ($1, 'username', $2, $3)
+                        """,
+                        user_id, row["username"], username
+                    )
+                if row["first_name"] != first_name:
+                    await pool.execute(
+                        """
+                        INSERT INTO usuario_history (user_id, campo, valor_antigo, valor_novo)
+                        VALUES ($1, 'first_name', $2, $3)
+                        """,
+                        user_id, row["first_name"], first_name
+                    )
+
+        return True
+
+    except UniqueViolationError as uv:
+        logger.error("Violação de UNIQUE ao adicionar usuário %s: %s", user_id, uv)
+    except (asyncpg.CannotConnectNowError, asyncpg.ConnectionDoesNotExistError) as conn_err:
+        logger.error("Erro de conexão ao adicionar usuário %s: %s", user_id, conn_err)
+    except PostgresError as pg_err:
+        logger.error("Erro no PostgreSQL ao adicionar usuário %s: %s", user_id, pg_err)
+    except Exception:
+        logger.exception("Erro inesperado ao adicionar usuário %s", user_id)
+
+    return False
 
 async def obter_usuario_db(user_id: int) -> asyncpg.Record | None:
     """
@@ -218,6 +268,13 @@ async def atualizar_pontos(
         return novos
 
 
+def escape_markdown_v2(text: str) -> str:
+    """
+    Escapa caracteres reservados do MarkdownV2.
+    """
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
+
 # Mensagem de Mural de Entrada
 async def setup_bot_description(app):
     try:
@@ -280,7 +337,7 @@ ADMIN_MENU = (
 
 async def iniciar_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id in ADMIN_IDS:
+    if user_id in ADMINS:
         context.user_data["is_admin"] = True
         await update.message.reply_text(ADMIN_MENU)
         return ConversationHandler.END
@@ -708,6 +765,102 @@ async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
         "❌ Operação cancelada. Nenhum dado foi salvo."
     )
     return ConversationHandler.END
+
+PAGE_SIZE = 20
+MAX_MESSAGE_LENGTH = 4000
+
+async def historico_usuario(update: Update, context: CallbackContext):
+    """
+    /historico_usuario <user_id> [page]
+    Exibe mudanças de username/first_name de um usuário paginadas.
+    Somente admins podem executar.
+    """
+    # 1) Permissão
+    requester_id = update.effective_user.id
+    if requester_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Você não tem permissão para isso.")
+        return
+
+    # 2) Validação de args e paginação
+    args = context.args or []
+    if len(args) not in (1, 2) or not args[0].isdigit():
+        await update.message.reply_text("Use: /historico_usuario <user_id> [page]")
+        return
+
+    target_id = int(args[0])
+    page = int(args[1]) if len(args) == 2 and args[1].isdigit() and int(args[1]) > 0 else 1
+    offset = (page - 1) * PAGE_SIZE
+
+    # 3) Fetch com tratamento de erros e timeout
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT campo, valor_antigo, valor_novo, changed_at
+              FROM usuario_history
+             WHERE user_id = $1
+          ORDER BY changed_at DESC
+             LIMIT $2 OFFSET $3
+            """,
+            target_id, PAGE_SIZE, offset
+        )
+    except (asyncpg.CannotConnectNowError,
+            asyncpg.ConnectionDoesNotExistError,
+            asyncpg.PostgresError) as db_err:
+        logger.error("Erro ao buscar histórico de %s (page %d): %s", target_id, page, db_err)
+        await update.message.reply_text(
+            "❌ Não foi possível acessar o histórico no momento. Tente novamente mais tarde."
+        )
+        return
+    except Exception:
+        logger.exception("Erro inesperado ao buscar histórico de %s (page %d)", target_id, page)
+        await update.message.reply_text(
+            "❌ Ocorreu um erro inesperado. Tente novamente mais tarde."
+        )
+        return
+
+    # 4) Sem registros
+    if not rows:
+        await update.message.reply_text(
+            f"ℹ️ Sem histórico de alterações para o user_id `{target_id}` na página {page}."
+        )
+        return
+
+    # 5) Monta texto
+    header = f"🕒 Histórico de alterações para `{target_id}` (página {page}, {PAGE_SIZE} por página):"
+    lines = [header]
+    for r in rows:
+        ts = r["changed_at"].strftime("%d/%m/%Y %H:%M")
+        campo = escape_markdown_v2(r["campo"])
+        antigo = escape_markdown_v2(r["antigo"])
+        novo = escape_markdown_v2(r["novo"])
+
+        lines.append(f"{ts} — *{campo}*: `{antigo}` → `{novo}`")
+
+    texto = "\n".join(lines)
+
+    # 6) Divide em blocos se muito longo
+    if len(texto) > MAX_MESSAGE_LENGTH:
+        chunks = []
+        current = []
+        size = 0
+        for line in lines:
+            size += len(line) + 1
+            if size > MAX_MESSAGE_LENGTH:
+                chunks.append("\n".join(current))
+                current = [line]
+                size = len(line) + 1
+            else:
+                current.append(line)
+        if current:
+            chunks.append("\n".join(current))
+
+        for chunk in chunks:
+            await update.message.reply_text(chunk, parse_mode="MarkdownV2")
+    else:
+        await update.message.reply_text(texto, parse_mode="MarkdownV2")
+
+    # 7) Log de acesso para auditoria
+    logger.info("Admin %s consultou histórico do user %s (page %d)", requester_id, target_id, page)
 
 
 async def on_startup(app):
