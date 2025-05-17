@@ -8,7 +8,6 @@ import asyncio
 import csv
 import io
 import math
-import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import CallbackQueryHandler
 from telegram.ext import ApplicationHandlerStop
@@ -68,6 +67,7 @@ async def init_db_pool():
         CREATE TABLE IF NOT EXISTS usuarios (
             user_id BIGINT PRIMARY KEY,
             username TEXT,
+            first_name TEXT,
             pontos INTEGER NOT NULL DEFAULT 0,
             nivel_atingido INTEGER NOT NULL DEFAULT 0,
             is_pontuador BOOLEAN NOT NULL DEFAULT FALSE,
@@ -106,9 +106,10 @@ async def adicionar_usuario_db(user_id: int, username: str, first_name: str) -> 
     False em caso de falha.
     """
     try:
-        async with pool.transaction():
+        async with pool.acquire() as conn:
+            async with conn.transaction():
             # 1) Busca valores atuais
-            row = await pool.fetchrow(
+                row = await pool.fetchrow(
                 "SELECT username, first_name FROM usuarios WHERE user_id = $1",
                 user_id
             )
@@ -337,9 +338,9 @@ async def setup_bot_description(app):
 async def setup_commands(app):
     try:
         comandos_basicos = [
-            BotCommand("start", "Iniciar Bot"),
             BotCommand("meus_pontos", "Ver sua pontuação e nível"),
             BotCommand("ranking_top10", "Top 10 de usuários por pontos"),
+            BotCommand("ranking_top10q", "Top 10 dos ultimos 15 dias"),
             BotCommand("historico", "Mostrar seu histórico de pontos"),
             BotCommand("como_ganhar", "Como ganhar mais pontos"),
         ]
@@ -598,14 +599,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Mensagem de boas-vindas
     await update.message.reply_text(
-        "🤖 Olá! Bem-vindo ao *Bot de Pontuação* da @cupomnavitrine\\.\n\n"
-        "Você pode usar os comandos abaixo:\n\n"
-        "• /meus_pontos \\- Ver seus pontos\n"
-        "• /rank_top10 \\- Ver o ranking geral\n"
-        "• /rank_top10q \\- Ver o ranking 15 dias\n"
-        "• /historico \\- Ver seu histórico\n"
-        "• /como_ganhar \\- Saber como ganhar pontos\n\n"
-        "_Basta clicar em um comando ou digitá\\-lo na conversa_\\. Vamos começar?",
+        "🤖 Olá\\! Bem\\-vindo ao Bot de Pontuação da @cupomnavitrine\\.\n\n"
+        "Você pode usar os comandos no menu a lateral:\n\n"
+        "_Basta clicar em um comando ou digitá\\-lo na conversa\\._ Vamos começar\\?",
         parse_mode="MarkdownV2"
     )
 
