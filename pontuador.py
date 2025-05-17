@@ -406,12 +406,12 @@ ADMIN_MENU = (
     "🔧 *Menu Admin* 🔧\n\n"
     "/add_pontos – Atribuir pontos a um usuário\n"
     "/del_pontos – remover pontos de um usuário\n"
+    "/historico_usuario – historico de nomes do usuário\n"
     "/add_admin – adicionar novo admin\n"
     "/rem_admin – remover admin\n"
     "/rem_pontuador – Remover permissão de pontuador\n"
     "/bloquear – Bloquear usuário\n"
     "/desbloquear – Desbloquear usuário\n"
-    "/historico_usuario – historico de nomes do usuário\n"
     "/listar_usuarios – lista de usuarios cadastrados\n"
     "/total_usuarios – quantidade total de usuarios cadastrados\n"
     "/adapproibida – Adicionar palavra proibida\n"
@@ -1229,8 +1229,16 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('como_ganhar', como_ganhar))
     app.add_handler(CommandHandler('historico', historico))
     app.add_handler(CommandHandler('ranking_top10', ranking_top10))
-    #app.add_handler(CommandHandler('ranking_top10q', ranking_top10q))
-
+    # app.add_handler(CommandHandler('ranking_top10q', ranking_top10q))
+    app.add_handler(
+        CommandHandler("historico_usuario", historico_usuario, filters=filters.User(ADMINS))
+    )
+    app.add_handler(
+        CommandHandler("listar_usuarios", listar_usuarios, filters=filters.User(ADMINS))
+    )
+    app.add_handler(
+        CommandHandler("total_usuarios", total_usuarios, filters=filters.User(ADMINS))
+    )
     # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
 
