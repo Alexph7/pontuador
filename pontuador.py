@@ -386,7 +386,7 @@ ADMIN_MENU = (
 )
 
 
-async def iniciar_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in ADMINS:
         context.user_data["is_admin"] = True
@@ -832,10 +832,31 @@ async def historico_usuario(update: Update, context: CallbackContext):
     Exibe mudanças de username/first_name de um usuário paginadas.
     Somente admins podem executar.
     """
+    AJUDA_HISTORICO = (
+        "*📘 Ajuda: /historico_usuario*\n\n"
+        "Este comando permite visualizar o histórico de alterações de *nome* ou *username* de um usuário.\n\n"
+        "*Uso básico:*\n"
+        "`/historico_usuario <user_id>` – Mostra a 1ª página do histórico do usuário informado.\n\n"
+        "*Uso com paginação:*\n"
+        "`/historico_usuario <user_id> <página>` – Mostra a página desejada do histórico.\n\n"
+        "*Exemplos:*\n"
+        "`/historico_usuario 123456789` – Exibe as alterações recentes do usuário com ID 123456789.\n"
+        "`/historico_usuario 123456789 2` – Exibe a 2ª página do histórico.\n\n"
+        "*ℹ️ Observações:*\n"
+        "• Apenas administradores têm permissão para executar este comando.\n"
+        f"• Cada página exibe até *{PAGE_SIZE}* registros.\n"
+        "• As alterações são registradas automaticamente sempre que um nome ou username muda.\n"
+    )
     # 1) Permissão
     requester_id = update.effective_user.id
     if requester_id not in ADMIN_IDS:
         await update.message.reply_text("❌ Você não tem permissão para isso.")
+        return
+
+    # Verificação de argumentos
+    args = context.args or []
+    if len(args) not in (1, 2) or not args[0].isdigit():
+        await update.message.reply_text(AJUDA_HISTORICO, parse_mode="MarkdownV2")
         return
 
     # 2) Validação de args e paginação
@@ -1066,13 +1087,13 @@ async def on_startup(app):
 
 main_conv = ConversationHandler(
     entry_points=[
-        CommandHandler("iniciar_admin", iniciar_admin),
+        CommandHandler("admin", admin),
         CommandHandler("add_pontos", add_pontos),
         # CommandHandler("del_pontos", del_pontos),
         # CommandHandler("add_admin", add_admin),
         # CommandHandler("rem_admin", rem_admin),
         # CommandHandler("rem_pontuador", rem_pontuador),
-        # CommandHandler("historico_usuario", historico_usuario),
+        CommandHandler("historico_usuario", historico_usuario),
         # CommandHandler("listar_usuarios", listar_usuarios),
         # CommandHandler("total_usuarios", total_usuarios),
         # CommandHandler("bloquear", bloquear),
@@ -1084,7 +1105,7 @@ main_conv = ConversationHandler(
     states={
         # SENHA ADMIN (exemplo de validação inicial)
         ADMIN_SENHA: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, iniciar_admin),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, tratar_senha),
             MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
         ],
 
@@ -1175,6 +1196,7 @@ if __name__ == '__main__':
     app.add_handler(main_conv)
 
     app.add_handler(CommandHandler('start', start, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler('admin', admin, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('meus_pontos', meus_pontos))
     app.add_handler(CommandHandler('como_ganhar', como_ganhar))
     app.add_handler(CommandHandler('historico', historico))
