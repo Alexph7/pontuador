@@ -2,8 +2,9 @@ import os
 import re
 import sys
 import asyncpg
-from asyncpg.exceptions import PostgresError, UniqueViolationError
 import logging
+from time import perf_counter
+from asyncpg import UniqueViolationError, PostgresError, CannotConnectNowError, ConnectionDoesNotExistError
 import asyncio
 import csv
 import io
@@ -99,66 +100,66 @@ async def init_db_pool():
         """)
 
 # --- Helpers de usuário (asyncpg) ---
-async def adicionar_usuario_db(user_id: int, username: str, first_name: str) -> bool:
-    """
-    Insere ou atualiza um usuário na tabela 'usuarios', registra mudanças
-    de username/first_name no histórico e retorna True em caso de sucesso,
-    False em caso de falha.
-    """
-    try:
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-            # 1) Busca valores atuais
-                row = await pool.fetchrow(
+async def adicionar_usuario_db(pool, user_id: int, username: str, first_name: str):
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # 1) tenta buscar registro antigo
+            old = await conn.fetchrow(
                 "SELECT username, first_name FROM usuarios WHERE user_id = $1",
                 user_id
             )
 
-            # 2) Insere ou atualiza condicionalmente
-            await pool.execute(
-                """
-                INSERT INTO usuarios (user_id, username, first_name)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (user_id) DO UPDATE
-                  SET username    = EXCLUDED.username,
-                      first_name  = EXCLUDED.first_name
-                  WHERE usuarios.username   IS DISTINCT FROM EXCLUDED.username
-                     OR usuarios.first_name IS DISTINCT FROM EXCLUDED.first_name
-                """,
-                user_id, username, first_name
-            )
+            if old:
+                # 2) upsert via UPDATE
+                await conn.execute(
+                    """
+                    UPDATE usuarios
+                       SET username   = $1,
+                           first_name = $2
+                     WHERE user_id = $3
+                    """,
+                    username, first_name, user_id
+                )
 
-            # 3) Registra histórico de mudanças
-            if row:
-                if row["username"] != username:
-                    await pool.execute(
+                # 3) grava histórico de cada mudança
+                if old['username'] != username:
+                    await conn.execute(
                         """
-                        INSERT INTO usuario_history (user_id, campo, valor_antigo, valor_novo)
-                        VALUES ($1, 'username', $2, $3)
+                        INSERT INTO usuario_history
+                          (user_id, campo, valor_antigo, valor_novo, criado_em)
+                        VALUES ($1, 'username', $2, $3, now())
                         """,
-                        user_id, row["username"], username
+                        user_id, old['username'], username
                     )
-                if row["first_name"] != first_name:
-                    await pool.execute(
+                if old['first_name'] != first_name:
+                    await conn.execute(
                         """
-                        INSERT INTO usuario_history (user_id, campo, valor_antigo, valor_novo)
-                        VALUES ($1, 'first_name', $2, $3)
+                        INSERT INTO usuario_history
+                          (user_id, campo, valor_antigo, valor_novo, criado_em)
+                        VALUES ($1, 'first_name', $2, $3, now())
                         """,
-                        user_id, row["first_name"], first_name
+                        user_id, old['first_name'], first_name
                     )
 
-        return True
+            else:
+                # 4) registro novo
+                await conn.execute(
+                    """
+                    INSERT INTO usuarios(user_id, username, first_name)
+                    VALUES($1, $2, $3)
+                    """,
+                    user_id, username, first_name
+                )
+                # (opcional) histórico de novo usuário
+                await conn.execute(
+                    """
+                    INSERT INTO usuario_history
+                      (user_id, campo, valor_antigo, valor_novo, criado_em)
+                    VALUES ($1, 'INSERT', NULL, $2, now())
+                    """,
+                    user_id, username
+                )
 
-    except UniqueViolationError as uv:
-        logger.error("Violação de UNIQUE ao adicionar usuário %s: %s", user_id, uv)
-    except (asyncpg.CannotConnectNowError, asyncpg.ConnectionDoesNotExistError) as conn_err:
-        logger.error("Erro de conexão ao adicionar usuário %s: %s", user_id, conn_err)
-    except PostgresError as pg_err:
-        logger.error("Erro no PostgreSQL ao adicionar usuário %s: %s", user_id, pg_err)
-    except Exception:
-        logger.exception("Erro inesperado ao adicionar usuário %s", user_id)
-
-    return False
 
 async def obter_usuario_db(user_id: int) -> asyncpg.Record | None:
     """
@@ -575,36 +576,24 @@ async def cancelar_suporte(update: Update, context: CallbackContext):
     return ConversationHandler.END
 
 
-from telegram import Update
-from telegram.ext import ContextTypes
-import logging
-
-logger = logging.getLogger(__name__)
-
 # Handler para /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
-    user_id = user.id
-    username = user.username or ""
-    first_name = user.first_name or ""
-
-    try:
-        await adicionar_usuario_db(user_id, username, first_name)
-        logger.info("Usuário registrado ou atualizado: %s (%s)", user_id, username)
-    except Exception as e:
-        logger.exception("Erro ao registrar usuário %s: %s", user_id, e)
-        await update.message.reply_text("❌ Ocorreu um erro ao registrar seu usuário. Tente novamente mais tarde.")
-        return
-
-    # Mensagem de boas-vindas
-    await update.message.reply_text(
-        "🤖 Olá\\! Bem\\-vindo ao Bot de Pontuação da @cupomnavitrine\\.\n\n"
-        "Você pode usar os comandos no menu a lateral:\n\n"
-        "_Basta clicar em um comando ou digitá\\-lo na conversa\\._ Vamos começar\\?",
-        parse_mode="MarkdownV2"
+    # dispara em background ou await, como preferir
+    asyncio.create_task(
+        adicionar_usuario_db(
+            pool,
+            user.id,
+            user.username or "",
+            user.first_name or ""
+        )
     )
 
+    await update.message.reply_text(
+        "🤖 Olá! Bem-vindo ao Bot de Pontuação da @cupomnavitrine.\n\n"
+        "Para começar abra o menu lateral ou digite um comando."
+    )
 
 async def meus_pontos(update: Update, context: CallbackContext):
     """
