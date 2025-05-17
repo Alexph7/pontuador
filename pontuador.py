@@ -50,10 +50,26 @@ if ADMIN_IDS:
 else:
     ADMINS = []
 
-# --- Estados de conversa ---
-ADMIN_SENHA, ESPERANDO_SUPORTE, ADD_PONTOS_POR_ID, ADD_PONTOS_QTD, ADD_PONTOS_MOTIVO, \
-DEL_PONTOS_ID, DEL_PONTOS_QTD, DEL_PONTOS_MOTIVO, REMOVER_PONTUADOR_ID, BLOQUEAR_ID, \
-DESBLOQUEAR_ID, ADD_PALAVRA_PROIBIDA, DEL_PALAVRA_PROIBIDA = range(13)
+# Estados de conversa
+(
+    ADMIN_SENHA,
+    ESPERANDO_SUPORTE,
+    ADD_PONTOS_POR_ID,
+    ADD_PONTOS_QTD,
+    ADD_PONTOS_MOTIVO,
+    DEL_PONTOS_ID,
+    DEL_PONTOS_QTD,
+    DEL_PONTOS_MOTIVO,
+    ADD_ADMIN_ID,
+    REM_ADMIN_ID,
+    REMOVER_PONTUADOR_ID,
+    BLOQUEAR_ID,
+    BLOQUEAR_MOTIVO,
+    DESBLOQUEAR_ID,
+    ADD_PALAVRA_PROIBIDA,
+    DEL_PALAVRA_PROIBIDA
+) = range(16)
+
 
 TEMPO_LIMITE_BUSCA = 5          # Tempo máximo (em segundos) para consulta
 PAGE_SIZE = 20             # Número de usuários por página
@@ -180,6 +196,24 @@ async def registrar_historico_db(user_id: int, pontos: int, motivo: str | None =
         VALUES ($1, $2, $3)
         """,
         user_id, pontos, motivo
+    )
+
+async def bloquear_user_bd(user_id: int, motivo: str | None = None):
+    """
+    Bloqueia um usuário registrando o user_id e o motivo na tabela usuarios_bloqueados.
+    Se o usuário já estiver bloqueado, atualiza motivo e timestamp.
+    """
+    await pool.execute(
+        """
+        INSERT INTO usuarios_bloqueados (user_id, motivo)
+        VALUES ($1, $2)
+        ON CONFLICT (user_id)
+        DO UPDATE
+          SET motivo = EXCLUDED.motivo,
+              data   = CURRENT_TIMESTAMP
+        """,
+        user_id,
+        motivo
     )
 
 async def total_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -405,17 +439,25 @@ async def tratar_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # --- Helpers de bloqueio com asyncpg ---
+async def bloquear_start(update: Update, context: CallbackContext):
+    await update.message.reply_text("👤 Envie o ID do usuário que deseja bloquear.")
+    return BLOQUEAR_ID
 
-async def bloquear_user_bd(user_id: int, motivo: str = None):
-    await pool.execute(
-        """
-        INSERT INTO usuarios_bloqueados (user_id, motivo)
-        VALUES ($1, $2)
-        ON CONFLICT (user_id)
-        DO UPDATE SET motivo = EXCLUDED.motivo, data = CURRENT_TIMESTAMP
-        """,
-        user_id, motivo
-    )
+async def bloquear_usuario_id(update: Update, context: CallbackContext):
+    try:
+        context.user_data["bloquear_id"] = int(update.message.text)
+        await update.message.reply_text("✍️ Envie o motivo do bloqueio.")
+        return BLOQUEAR_MOTIVO
+    except ValueError:
+        return await update.message.reply_text("❌ ID inválido. Tente novamente.")
+
+async def bloquear_usuario_motivo(update: Update, context: CallbackContext):
+    motivo = update.message.text
+    user_id = context.user_data["bloquear_id"]
+    await bloquear_user_bd(user_id, motivo)
+    await update.message.reply_text(f"✅ Usuário {user_id} bloqueado. Motivo: {motivo}")
+    return ConversationHandler.END
+
 
 async def desbloquear_user_bd(user_id: int):
     await pool.execute(
@@ -710,8 +752,6 @@ async def add_pontos_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Operação cancelada.")
     return ConversationHandler.END
 
-
-
 async def adicionar_pontuador(update: Update, context: CallbackContext):
     chamador = update.effective_user.id
     reg = await obter_usuario_db(chamador)
@@ -769,21 +809,6 @@ async def ranking_top10(update: Update, context: CallbackContext):
     await update.message.reply_text(text)
 
 
-async def zerar_pontos(update: Update, context: CallbackContext):
-    if update.effective_user.id != ID_ADMIN:
-        return await update.message.reply_text("🔒 Apenas admin pode usar.")
-    try:
-        alvo = int(context.args[0])
-    except (IndexError, ValueError):
-        return await update.message.reply_text("Uso: /zerar_pontos <user_id>")
-
-    await pool.execute(
-        "UPDATE usuarios SET pontos = 0 WHERE user_id = $1",
-        alvo
-    )
-    await update.message.reply_text(f"✅ Pontos de {alvo} zerados.")
-
-
 async def pontuador(update: Update, context: CallbackContext):
     if update.effective_user.id != ID_ADMIN:
         return await update.message.reply_text("🔒 Apenas admin pode usar.")
@@ -825,13 +850,14 @@ async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
 
 PAGE_SIZE = 20
 MAX_MESSAGE_LENGTH = 4000
+HISTORICO_USER_ID = 4
 
 async def historico_usuario(update: Update, context: CallbackContext):
-    """
-    /historico_usuario <user_id> [page]
-    Exibe mudanças de username/first_name de um usuário paginadas.
-    Somente admins podem executar.
-    """
+
+    if not context.user_data.get("is_admin"):
+        await update.message.reply_text("🔒 Você precisa autenticar: use /admin primeiro.")
+        return ConversationHandler.END
+
     AJUDA_HISTORICO = (
         "*📘 Ajuda: /historico_usuario*\n\n"
         "Este comando permite visualizar o histórico de alterações de *nome* ou *username* de um usuário.\n\n"
@@ -849,7 +875,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
     )
     # 1) Permissão
     requester_id = update.effective_user.id
-    if requester_id not in ADMIN_IDS:
+    if requester_id not in ADMINS:
         await update.message.reply_text("❌ Você não tem permissão para isso.")
         return
 
@@ -939,6 +965,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
 
     # 7) Log de acesso para auditoria
     logger.info("Admin %s consultou histórico do user %s (page %d)", requester_id, target_id, page)
+
 
 async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1093,97 +1120,98 @@ main_conv = ConversationHandler(
         # CommandHandler("add_admin", add_admin),
         # CommandHandler("rem_admin", rem_admin),
         # CommandHandler("rem_pontuador", rem_pontuador),
-        CommandHandler("historico_usuario", historico_usuario),
-        # CommandHandler("listar_usuarios", listar_usuarios),
-        # CommandHandler("total_usuarios", total_usuarios),
         # CommandHandler("bloquear", bloquear),
         # CommandHandler("desbloquear", desbloquear),
         CommandHandler("add_palavra_proibida", add_palavra_proibida),
         CommandHandler("del_palavra_proibida", del_palavra_proibida),
-        # CommandHandler("listaproibida", listaproibida)
     ],
     states={
-        # SENHA ADMIN (exemplo de validação inicial)
+        # /admin → senha
         ADMIN_SENHA: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, tratar_senha),
             MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
         ],
 
-        # # SUPORTE (caso você use suporte)
-        # ESPERANDO_SUPORTE: [
-        #     MessageHandler(filters.TEXT & ~filters.COMMAND, tratar_mensagem_suporte),
-        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
-        # ],
-        #
-        # # /add_pontos
-        # ADD_PONTOS_POR_ID: [
-        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_id_add_pontos),
-        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
-        # ],
-        # ADD_PONTOS_QTD: [
-        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_qtd_add_pontos),
-        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
-        # ],
-        # ADD_PONTOS_MOTIVO: [
-        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_motivo_add_pontos),
-        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
-        # ],
-        #
-        # # /del_pontos
+        # /add_pontos → id, qtd, motivo
+        ADD_PONTOS_POR_ID: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, add_pontos_IDuser),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        ],
+        ADD_PONTOS_QTD: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, add_pontos_quantidade),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        ],
+        ADD_PONTOS_MOTIVO: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, add_pontos_motivo),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        ],
+
+        # /del_pontos → id, qtd, motivo
         # DEL_PONTOS_ID: [
-        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_id_del_pontos),
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, del_pontos_IDuser),
         #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
         # ],
         # DEL_PONTOS_QTD: [
-        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_qtd_del_pontos),
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, del_pontos_quantidade),
         #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
         # ],
         # DEL_PONTOS_MOTIVO: [
-        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_motivo_del_pontos),
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, del_pontos_motivo),
         #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
         # ],
-        #
-        # # /remover_pontuador
+
+        # # /add_admin → id
+        # ADD_ADMIN_ID: [
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, add_admin_execute),
+        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        # ],
+        # # /rem_admin → id
+        # REM_ADMIN_ID: [
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, rem_admin_execute),
+        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        # ],
+        # # /rem_pontuador → id
         # REMOVER_PONTUADOR_ID: [
-        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_id_remover_pontuador),
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, remover_pontuador),
         #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
         # ],
-        #
-        # # /bloquear
-        # BLOQUEAR_ID: [
-        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_id_bloquear),
-        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
-        # ],
-        #
-        # # /desbloquear
-        # DESBLOQUEAR_ID: [
-        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_id_desbloquear),
-        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
-        # ],
-        #
-        # # /add_palavra_proibida
+
+        # /bloquear → id, motivo
+        BLOQUEAR_ID: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, bloquear_usuario_id),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        ],
+        BLOQUEAR_MOTIVO: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, bloquear_usuario_motivo),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        ],
+
+        # /desbloquear → id
+        DESBLOQUEAR_ID: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, desbloquear_usuario),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        ],
+
+        # # /add_palavra_proibida → palavra
         # ADD_PALAVRA_PROIBIDA: [
-        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_palavras_proibidas_add),
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_palavra_proibida_add),
         #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
         # ],
-        #
-        # # /del_palavra_proibida
+        # # /del_palavra_proibida → palavra
         # DEL_PALAVRA_PROIBIDA: [
-        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_palavras_proibidas_del),
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_palavra_proibida_del),
         #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
         # ],
     },
     fallbacks=[CommandHandler("cancelar", cancelar)],
-        allow_reentry=True,
+    allow_reentry=True,
 )
 
 # --- Inicialização do bot ---
 if __name__ == '__main__':
-    import asyncio
 
     # 1) inicializa o pool ANTES de criar o Application
     asyncio.get_event_loop().run_until_complete(init_db_pool())
-    logging.info("✅ Pool asyncpg inicializado e tabelas garantidas.")
 
     # 2) agora monte o bot
     app = (
