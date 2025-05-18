@@ -21,7 +21,11 @@ from telegram.ext import (
     CommandHandler, CallbackContext,
     MessageHandler, filters, ConversationHandler
 )
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
+def hoje_sp():
+    return datetime.now(tz=ZoneInfo("America/Sao_Paulo")).date()
 
 pool: asyncpg.Pool | None = None
 logging.basicConfig(level=logging.INFO)
@@ -89,7 +93,7 @@ async def init_db_pool():
             pontos INTEGER NOT NULL DEFAULT 0,
             nivel_atingido INTEGER NOT NULL DEFAULT 0,
             is_pontuador BOOLEAN NOT NULL DEFAULT FALSE,
-            visto BOOLEAN NOT NULL DEFAULT FALSE
+            ultimo_visto DATE
         );
         CREATE TABLE IF NOT EXISTS historico_pontos (
             id SERIAL PRIMARY KEY,
@@ -835,20 +839,22 @@ async def pontuador(update: Update, context: CallbackContext):
 
 async def tratar_presenca(update, context):
     user = update.effective_user
-    await adicionar_usuario_db(user.id, user.username)
+
+    # 1) Garante que exista sem logar toda vez
+    await adicionar_usuario_db(pool, user.id, user.username or "", user.first_name or "")
+
+    # 2) Busca registro completo
     reg = await obter_usuario_db(user.id)
+    hoje = hoje_sp()
 
-    hoje = date.today()
-
+    # 3) Dá pontuação uma única vez por dia
     if reg['ultimo_visto'] != hoje:
         await atualizar_pontos(user.id, 1, 'Presença diária', context.bot)
         await pool.execute(
-            "UPDATE usuarios SET ultimo_visto = $1 WHERE user_id = $2",
+            "UPDATE usuarios SET ultimo_visto = $1 WHERE user_id = $2::bigint",
             hoje, user.id
         )
-        await update.message.reply_text("📅 +1 ponto por presença de hoje!")
-    else:
-        await update.message.reply_text("✅ Presença de hoje já registrada.")
+        logger.info(f"[PRESENÇA] +1 ponto para {user.id} em {hoje}")
 
 
 async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
@@ -864,70 +870,84 @@ MAX_MESSAGE_LENGTH = 4000
 HISTORICO_USER_ID = 4
 
 async def historico_usuario(update: Update, context: CallbackContext):
-
+    # 0) Autenticação de admin
+    requester_id = update.effective_user.id
     if not context.user_data.get("is_admin"):
         await update.message.reply_text("🔒 Você precisa autenticar: use /admin primeiro.")
         return ConversationHandler.END
 
+    # Ajuda / instruções
     AJUDA_HISTORICO = (
         "*📘 Ajuda: /historico_usuario*\n\n"
-        "Este comando permite visualizar o histórico de alterações de *nome* ou *username* de um usuário.\n\n"
-        "*Uso básico:*\n"
-        "`/historico_usuario <user_id>` – Mostra a 1ª página do histórico do usuário informado.\n\n"
-        "*Uso com paginação:*\n"
-        "`/historico_usuario <user_id> <página>` – Mostra a página desejada do histórico.\n\n"
+        "Este comando retorna o histórico de alterações dos usuários.\n\n"
+        "*Formas de uso:*\n"
+        "`/historico_usuario` – Mostra a 1ª página do histórico completo (todos os usuários).\n"
+        "`/historico_usuario <user_id>` – Mostra a 1ª página do histórico de um usuário.\n"
+        "`/historico_usuario <user_id> <página>` – Página desejada do histórico.\n\n"
         "*Exemplos:*\n"
-        "`/historico_usuario 123456789` – Exibe as alterações recentes do usuário com ID 123456789.\n"
-        "`/historico_usuario 123456789 2` – Exibe a 2ª página do histórico.\n\n"
-        "*ℹ️ Observações:*\n"
-        "• Apenas administradores têm permissão para executar este comando.\n"
-        f"• Cada página exibe até *{PAGE_SIZE}* registros.\n"
-        "• As alterações são registradas automaticamente sempre que um nome ou username muda.\n"
+        "`/historico_usuario`\n"
+        "`/historico_usuario 123456789`\n"
+        "`/historico_usuario 123456789 2`\n\n"
+        f"*ℹ️ Cada página exibe até {PAGE_SIZE} registros.*"
     )
-    # 1) Permissão
-    requester_id = update.effective_user.id
-    if requester_id not in ADMINS:
-        await update.message.reply_text("❌ Você não tem permissão para isso.")
-        return
 
-    # Verificação de argumentos
+    # 1) Parsing de argumentos
     args = context.args or []
-    if len(args) not in (1, 2) or not args[0].isdigit():
+    # Sem argumentos => histórico global
+    if len(args) == 0:
+        target_id = None
+        page = 1
+    # Com 1 argumento => user_id
+    elif len(args) == 1 and args[0].isdigit():
+        target_id = int(args[0])
+        page = 1
+    # Com 2 argumentos => user_id + página
+    elif len(args) == 2 and args[0].isdigit() and args[1].isdigit() and int(args[1]) > 0:
+        target_id = int(args[0])
+        page = int(args[1])
+    else:
         await update.message.reply_text(AJUDA_HISTORICO, parse_mode="MarkdownV2")
         return
 
-    # 2) Validação de args e paginação
-    args = context.args or []
-    if len(args) not in (1, 2) or not args[0].isdigit():
-        await update.message.reply_text("Use: /historico_usuario <user_id> [page]")
-        return
-
-    target_id = int(args[0])
-    page = int(args[1]) if len(args) == 2 and args[1].isdigit() and int(args[1]) > 0 else 1
     offset = (page - 1) * PAGE_SIZE
 
-    # 3) Fetch com tratamento de erros e timeout
-    try:
-        rows = await pool.fetch(
-            """
-            SELECT campo, valor_antigo, valor_novo, changed_at
-              FROM usuario_history
-             WHERE user_id = $1
-          ORDER BY changed_at DESC
-             LIMIT $2 OFFSET $3
-            """,
-            target_id, PAGE_SIZE, offset
+    # 2) Construção da query dinâmica
+    if target_id is None:
+        sql = (
+            "SELECT user_id, campo, valor_antigo, valor_novo, criado_em"
+            " FROM usuario_history"
+            " ORDER BY criado_em DESC"
+            " LIMIT $1 OFFSET $2"
         )
+        params = (PAGE_SIZE, offset)
+        header_txt = escape_markdown_v2(f"🕒 Histórico completo (todos os usuários, página {page}):")
+    else:
+        sql = (
+            "SELECT user_id, campo, valor_antigo, valor_novo, criado_em"
+            " FROM usuario_history"
+            " WHERE user_id = $1"
+            " ORDER BY criado_em DESC"
+            " LIMIT $2 OFFSET $3"
+        )
+        params = (target_id, PAGE_SIZE, offset)
+        header_txt = escape_markdown_v2(
+            f"🕒 Histórico de alterações para `{target_id}` "
+            f"(página {page}, {PAGE_SIZE} por página):"
+        )
+
+    # 3) Execução da query
+    try:
+        rows = await pool.fetch(sql, *params)
     except (asyncpg.CannotConnectNowError,
             asyncpg.ConnectionDoesNotExistError,
             asyncpg.PostgresError) as db_err:
-        logger.error("Erro ao buscar histórico de %s (page %d): %s", target_id, page, db_err)
+        logger.error("Erro ao buscar histórico %s: %s", target_id or 'global', db_err)
         await update.message.reply_text(
             "❌ Não foi possível acessar o histórico no momento. Tente novamente mais tarde."
         )
         return
     except Exception:
-        logger.exception("Erro inesperado ao buscar histórico de %s (page %d)", target_id, page)
+        logger.exception("Erro inesperado ao buscar histórico %s", target_id or 'global')
         await update.message.reply_text(
             "❌ Ocorreu um erro inesperado. Tente novamente mais tarde."
         )
@@ -935,47 +955,63 @@ async def historico_usuario(update: Update, context: CallbackContext):
 
     # 4) Sem registros
     if not rows:
-        await update.message.reply_text(
-            f"ℹ️ Sem histórico de alterações para o user_id `{target_id}` na página {page}."
+        msg = (
+            f"ℹ️ Sem histórico de alterações "
+            f"{'para o user_id ' + str(target_id) + ' ' if target_id else ''}"  
+            f"na página {page}."
         )
+        await update.message.reply_text(msg)
         return
 
-    # 5) Monta texto
-    header = f"🕒 Histórico de alterações para `{target_id}` (página {page}, {PAGE_SIZE} por página):"
-    lines = [header]
+    # 5) Monta texto de saída
+    lines = [header_txt]
     for r in rows:
-        ts = r["changed_at"].strftime("%d/%m/%Y %H:%M")
-        campo = escape_markdown_v2(r["campo"])
-        antigo = escape_markdown_v2(r["antigo"])
-        novo = escape_markdown_v2(r["novo"])
+        ts = r["criado_em"].strftime("%d/%m/%Y %H:%M")
+        uid = r["user_id"]
 
-        lines.append(f"{ts} — *{campo}*: `{antigo}` → `{novo}`")
+        # Mapeia o valor do campo para nome mais amigável
+        raw_op = r["campo"]  # ex: INSERT, UPDATE, DELETE
+        op_label = {
+            "INSERT": "Inserido",
+            "UPDATE": "Atualizado",
+            "DELETE": "Removido"
+        }.get(raw_op, raw_op)  # fallback para o original, se desconhecido
+
+        campo = escape_markdown_v2(op_label)
+        antigo = escape_markdown_v2(r["valor_antigo"] or "")
+        novo = escape_markdown_v2(r["valor_novo"] or "")
+
+        if target_id is None:
+            lines.append(f"{ts} — `{uid}` *{campo}*: `{antigo}` → `{novo}`")
+        else:
+            lines.append(f"{ts} — *{campo}*: `{antigo}` → `{novo}`")
 
     texto = "\n".join(lines)
 
-    # 6) Divide em blocos se muito longo
+    # 6) Chunking de mensagens longas
     if len(texto) > MAX_MESSAGE_LENGTH:
-        chunks = []
-        current = []
-        size = 0
+        chunks, current, size = [], [], 0
         for line in lines:
             size += len(line) + 1
             if size > MAX_MESSAGE_LENGTH:
                 chunks.append("\n".join(current))
-                current = [line]
-                size = len(line) + 1
+                current, size = [line], len(line) + 1
             else:
                 current.append(line)
         if current:
             chunks.append("\n".join(current))
-
         for chunk in chunks:
             await update.message.reply_text(chunk, parse_mode="MarkdownV2")
     else:
         await update.message.reply_text(texto, parse_mode="MarkdownV2")
 
-    # 7) Log de acesso para auditoria
-    logger.info("Admin %s consultou histórico do user %s (page %d)", requester_id, target_id, page)
+    # 7) Log de auditoria
+    logger.info(
+        "Admin %s consultou histórico %s (page %d)",
+        requester_id,
+        target_id or 'global',
+        page
+    )
 
 
 async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1242,15 +1278,16 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('ranking_top10', ranking_top10))
     # app.add_handler(CommandHandler('ranking_top10q', ranking_top10q))
     app.add_handler(
-        CommandHandler("historico_usuario", historico_usuario, filters=filters.User(ADMINS))
+        CommandHandler("historico_usuario", historico_usuario)
     )
     app.add_handler(
-        CommandHandler("listar_usuarios", listar_usuarios, filters=filters.User(ADMINS))
+        CommandHandler("listar_usuarios", listar_usuarios)
     )
     app.add_handler(
-        CommandHandler("total_usuarios", total_usuarios, filters=filters.User(ADMINS))
+        CommandHandler("total_usuarios", total_usuarios)
     )
     # Presença em grupos
+    app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
 
     logger.info("🔄 Iniciando polling...")
