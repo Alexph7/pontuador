@@ -3,6 +3,7 @@ import re
 import sys
 import asyncpg
 import logging
+from datetime import date
 from time import perf_counter
 from asyncpg import UniqueViolationError, PostgresError, CannotConnectNowError, ConnectionDoesNotExistError
 import asyncio
@@ -121,29 +122,34 @@ async def adicionar_usuario_db(pool, user_id: int, username: str, first_name: st
         async with conn.transaction():
             # 1) tenta buscar registro antigo
             old = await conn.fetchrow(
-                "SELECT username, first_name FROM usuarios WHERE user_id = $1",
+                "SELECT username, first_name FROM usuarios WHERE user_id = $1::bigint",
                 user_id
             )
 
             if old:
-                # 2) upsert via UPDATE
+                # LOG antes do UPDATE
+                logger.info(
+                    f"[DB] Usuário {user_id} existe: atualizando de "
+                    f"({old['username']}, {old['first_name']}) para ({username}, {first_name})"
+                )
+                # UPDATE forçando BIGINT no WHERE
                 await conn.execute(
                     """
                     UPDATE usuarios
                        SET username   = $1,
                            first_name = $2
-                     WHERE user_id = $3
+                     WHERE user_id = $3::bigint
                     """,
                     username, first_name, user_id
                 )
 
-                # 3) grava histórico de cada mudança
+                # histórico de cada mudança (já espera int)
                 if old['username'] != username:
                     await conn.execute(
                         """
                         INSERT INTO usuario_history
                           (user_id, campo, valor_antigo, valor_novo, criado_em)
-                        VALUES ($1, 'username', $2, $3, now())
+                        VALUES ($1::bigint, 'username', $2, $3, now())
                         """,
                         user_id, old['username'], username
                     )
@@ -152,30 +158,33 @@ async def adicionar_usuario_db(pool, user_id: int, username: str, first_name: st
                         """
                         INSERT INTO usuario_history
                           (user_id, campo, valor_antigo, valor_novo, criado_em)
-                        VALUES ($1, 'first_name', $2, $3, now())
+                        VALUES ($1::bigint, 'first_name', $2, $3, now())
                         """,
                         user_id, old['first_name'], first_name
                     )
 
             else:
-                # 4) registro novo
+                # LOG antes do INSERT
+                logger.info(
+                    f"[DB] Usuário {user_id} não existe: inserindo ({username}, {first_name})"
+                )
+                # INSERT forçando BIGINT no VALUES
                 await conn.execute(
                     """
                     INSERT INTO usuarios(user_id, username, first_name)
-                    VALUES($1, $2, $3)
+                    VALUES($1::bigint, $2, $3)
                     """,
                     user_id, username, first_name
                 )
-                # (opcional) histórico de novo usuário
+                # histórico de novo usuário
                 await conn.execute(
                     """
                     INSERT INTO usuario_history
                       (user_id, campo, valor_antigo, valor_novo, criado_em)
-                    VALUES ($1, 'INSERT', NULL, $2, now())
+                    VALUES ($1::bigint, 'INSERT', NULL, $2, now())
                     """,
                     user_id, username
                 )
-
 
 async def obter_usuario_db(user_id: int) -> asyncpg.Record | None:
     """
@@ -824,21 +833,23 @@ async def pontuador(update: Update, context: CallbackContext):
     await update.message.reply_text(f"✅ {alvo} não é mais pontuador.")
 
 
-async def tratar_presenca(update: Update, context: CallbackContext):
+async def tratar_presenca(update, context):
     user = update.effective_user
-    # garante existência e recupera dados
     await adicionar_usuario_db(user.id, user.username)
     reg = await obter_usuario_db(user.id)
 
-    if not reg['visto']:
-        # pontua presença
-        await atualizar_pontos(user.id, 1, 'Presença inicial', context.bot)
-        # marca visto = TRUE
+    hoje = date.today()
+
+    if reg['ultimo_visto'] != hoje:
+        await atualizar_pontos(user.id, 1, 'Presença diária', context.bot)
         await pool.execute(
-            "UPDATE usuarios SET visto = TRUE WHERE user_id = $1",
-            user.id
+            "UPDATE usuarios SET ultimo_visto = $1 WHERE user_id = $2",
+            hoje, user.id
         )
-        await update.message.reply_text("👋 +1 ponto por participar!")
+        await update.message.reply_text("📅 +1 ponto por presença de hoje!")
+    else:
+        await update.message.reply_text("✅ Presença de hoje já registrada.")
+
 
 async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
     # Limpa tudo que já havia sido armazenado
