@@ -12,8 +12,9 @@ import io
 import math
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import CallbackQueryHandler
-from telegram.ext import ApplicationHandlerStop
 from telegram import Update, Bot
+from telegram.ext import ApplicationHandlerStop
+from typing import Dict, Any
 from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder, ContextTypes
 from telegram import BotCommand, BotCommandScopeDefault, BotCommandScopeAllPrivateChats
@@ -180,15 +181,23 @@ async def adicionar_usuario_db(pool, user_id: int, username: str, first_name: st
                     """,
                     user_id, username, first_name
                 )
-                # histórico de novo usuário
+                # histórico de novo usuário: registra ambos os campos
                 await conn.execute(
-                    """
+                        """
                     INSERT INTO usuario_history
                       (user_id, campo, valor_antigo, valor_novo, criado_em)
                     VALUES ($1::bigint, 'INSERT', NULL, $2, now())
                     """,
-                    user_id, username
-                )
+                        user_id, username or ""
+                                  )
+                await conn.execute(
+                        """
+                    INSERT INTO usuario_history
+                      (user_id, campo, valor_antigo, valor_novo, criado_em)
+                    VALUES ($1::bigint, 'INSERT', NULL, $2, now())
+                    """,
+                        user_id, first_name or ""
+                                  )
 
 async def obter_usuario_db(user_id: int) -> asyncpg.Record | None:
     """
@@ -965,26 +974,38 @@ async def historico_usuario(update: Update, context: CallbackContext):
 
     # 5) Monta texto de saída
     lines = [header_txt]
+    insert_map: Dict[int, Dict[str, Any]] = {}  # agrupa INSERTs por user_id
+
     for r in rows:
         ts = r["criado_em"].strftime("%d/%m/%Y %H:%M")
         uid = r["user_id"]
+        raw_op = r["campo"]
+        antigo = r["valor_antigo"]
+        novo = r["valor_novo"]
 
-        # Mapeia o valor do campo para nome mais amigável
-        raw_op = r["campo"]  # ex: INSERT, UPDATE, DELETE
-        op_label = {
-            "INSERT": "Inserido",
-            "UPDATE": "Atualizado",
-            "DELETE": "Removido"
-        }.get(raw_op, raw_op)  # fallback para o original, se desconhecido
-
-        campo = escape_markdown_v2(op_label)
-        antigo = escape_markdown_v2(r["valor_antigo"] or "")
-        novo = escape_markdown_v2(r["valor_novo"] or "")
-
-        if target_id is None:
-            lines.append(f"{ts} — `{uid}` *{campo}*: `{antigo}` → `{novo}`")
+        if raw_op == "INSERT":
+            # agrupa username e first_name de um mesmo INSERT
+            insert_map.setdefault(uid, {"ts": ts, "vals": []})["vals"].append(novo)
         else:
-            lines.append(f"{ts} — *{campo}*: `{antigo}` → `{novo}`")
+            # UPDATE ou DELETE: uma linha por campo
+            campo_label = escape_markdown_v2(raw_op)
+            antigo_txt = escape_markdown_v2(antigo or "não tem")
+            novo_txt = escape_markdown_v2(novo or "não tem")
+            if target_id is None:
+                lines.append(f"{ts} — `{uid}` *{campo_label}*: `{antigo_txt}` → `{novo_txt}`")
+            else:
+                lines.append(f"{ts} — *{campo_label}*: `{antigo_txt}` → `{novo_txt}`")
+
+    # adiciona as linhas agrupadas de INSERT, sempre mostrando username → first_name
+    for uid, info in insert_map.items():
+        ts = info["ts"]
+        vals = info["vals"]
+        username = escape_markdown_v2(vals[0] or "não tem")
+        first_name = escape_markdown_v2(vals[1] if len(vals) > 1 else "não tem")
+        if target_id is None:
+            lines.append(f"{ts} — `{uid}` *Inserido*: `{username}` → {first_name}")
+        else:
+            lines.append(f"{ts} — *Inserido*: `{username}` → {first_name}")
 
     texto = "\n".join(lines)
 
