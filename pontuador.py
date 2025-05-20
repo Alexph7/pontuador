@@ -943,99 +943,152 @@ async def historico_usuario(update: Update, context: CallbackContext):
         )
         return ConversationHandler.END
 
-    # Parse de user_id e página
+    # inicialização segura
     target_id = None
     page = 1
-    if len(args) == 1 and args[0].isdigit() and is_callback:
+
+    if len(args) == 0:
+        target_id = None
+        page = 1
+    # botão “Próximo/Anterior”: um único arg → página
+    elif len(args) == 1 and args[0].isdigit() and is_callback:
         page = int(args[0])
+    # comando normal: um único arg → user_id
     elif len(args) == 1 and args[0].isdigit():
         target_id = int(args[0])
+
     elif len(args) == 2 and args[0].isdigit() and args[1].isdigit():
         target_id = int(args[0])
         page = int(args[1])
-    elif len(args) > 0:
-        await update.message.reply_text("❌ Uso incorreto. Digite '/historico_usuario ajuda'.")
-        return ConversationHandler.END
+    else:
+        await update.message.reply_text("❌ Uso incorreto digite '/historico_usuario ajuda  '.")
+        return
 
     offset = (page - 1) * PAGE_SIZE
 
-    # 2) Monta SQL
+    # 2) Construção da query dinâmica
     if target_id is None:
         sql = (
-            "SELECT user_id, campo, valor_antigo, valor_novo, criado_em "
-            "FROM usuario_history "
-            "ORDER BY criado_em DESC "
-            "LIMIT $1 OFFSET $2"
+            "SELECT user_id, campo, valor_antigo, valor_novo, criado_em"
+            " FROM usuario_history"
+            " ORDER BY criado_em DESC"
+            " LIMIT $1 OFFSET $2"
         )
         params = (PAGE_SIZE + 1, offset)
-        header_txt = escape_markdown_v2(f"🕒 Histórico completo (página {page}):")
+        header_txt = escape_markdown_v2(
+            f"🕒 Histórico completo (todos os usuários, página {page}):"
+        )
     else:
         sql = (
-            "SELECT user_id, campo, valor_antigo, valor_novo, criado_em "
-            "FROM usuario_history "
-            "WHERE user_id = $1 "
-            "ORDER BY criado_em DESC "
-            "LIMIT $2 OFFSET $3"
+            "SELECT user_id, campo, valor_antigo, valor_novo, criado_em"
+            " FROM usuario_history"
+            " WHERE user_id = $1"
+            " ORDER BY criado_em DESC"
+            " LIMIT $2 OFFSET $3"
         )
         params = (target_id, PAGE_SIZE + 1, offset)
         header_txt = escape_markdown_v2(
-            f"🕒 Histórico de `{target_id}` (página {page}):"
+            f"🕒 Histórico de alterações para `{target_id}` "
+            f"(página {page}, {PAGE_SIZE} por página):"
         )
 
-    # 3) Executa query
+    # 3) Execução da query
     try:
         rows = await pool.fetch(sql, *params)
-    except Exception as e:
-        logger.error("Erro ao buscar histórico: %s", e)
-        await update.message.reply_text("❌ Não foi possível acessar o histórico. Tente mais tarde.")
-        return ConversationHandler.END
+        tem_mais = len(rows) > PAGE_SIZE
+        rows = rows[:PAGE_SIZE]
+    except (asyncpg.CannotConnectNowError,
+            asyncpg.ConnectionDoesNotExistError,
+            asyncpg.PostgresError) as db_err:
+        logger.error("Erro ao buscar histórico %s: %s", target_id or 'global', db_err)
+        await update.message.reply_text(
+            "❌ Não foi possível acessar o histórico no momento. Tente novamente mais tarde."
+        )
+        return
+    except Exception:
+        logger.exception("Erro inesperado ao buscar histórico %s", target_id or 'global')
+        await update.message.reply_text(
+            "❌ Ocorreu um erro inesperado. Tente novamente mais tarde."
+        )
+        return
 
-    tem_mais = len(rows) > PAGE_SIZE
-    rows = rows[:PAGE_SIZE]
-
+    # 4) Sem registros
     if not rows:
-        msg = f"ℹ️ Sem histórico {'para ' + str(target_id) if target_id else ''} na página {page}."
+        msg = (
+            f"ℹ️ Sem histórico de alterações "
+            f"{'para o user_id ' + str(target_id) + ' ' if target_id else ''}"
+            f"na página {page}."
+        )
         await update.message.reply_text(msg)
-        return ConversationHandler.END
+        return
 
-    # 4) Agrupa por (user_id, criado_em)
-    from collections import OrderedDict
-    grupos: dict[tuple, dict[str, str]] = OrderedDict()
+    # 5) Monta texto de saída
+    lines = [header_txt]
+    insert_map: Dict[int, Dict[str, Any]] = {}
+
     for r in rows:
-        chave = (r['user_id'], r['criado_em'])
-        grupos.setdefault(chave, {})[r['campo']] = r['valor_novo']
+        ts = r["criado_em"].strftime("%d/%m/%Y %H:%M")
+        uid = r["user_id"]
+        campo = r["campo"]
+        novo = r["valor_novo"]
 
-    # 5) Monta linhas de saída
-    lines = [escape_markdown_v2(header_txt)]
-    for (user_id, criado_em), campos in grupos.items():
-        ts = criado_em.strftime("%d/%m/%Y %H:%M")
+        # inicializa estrutura
+        insert_map.setdefault(uid, {
+            "ts": ts,
+            "username": None,
+            "first_name": None,
+            "last_name": None,
+            "status": None,
+        })
 
-        if 'INSERT' in campos:
-            # Inserção inicial, valor_novo tem todos os campos agregados
-            raw = campos['INSERT']
-            u, fn, ln = raw.split(DELIM)
+        if campo == "INSERT":
+            # novo cadastro
+            insert_map[uid]["status"] = "Inserido"
+            # tenta preencher campos na ordem username, first_name, last_name
+            if insert_map[uid]["username"] is None:
+                insert_map[uid]["username"] = novo
+            elif insert_map[uid]["first_name"] is None:
+                insert_map[uid]["first_name"] = novo
+            else:
+                insert_map[uid]["last_name"] = novo
+
+        else:
+            # atualização de campo
+            insert_map[uid]["status"] = "Atualizado"
+            if campo == "username":
+                insert_map[uid]["username"] = novo
+            elif campo == "first_name":
+                insert_map[uid]["first_name"] = novo
+            elif campo == "last_name":
+                insert_map[uid]["last_name"] = novo
+
+    # adiciona linhas formatadas
+    for uid, info in insert_map.items():
+        ts = info["ts"]
+        status = info.get("status", "Atualizado")
+        username = escape_markdown_v2(info["username"] or "não tem")
+        first_name = escape_markdown_v2(info["first_name"] or "não tem")
+        last_name = escape_markdown_v2(info["last_name"] or "não tem")
+
+        if target_id is None:
             lines.append(
-                f"{ts} — INSERIDO — ID: `{escape_markdown_v2(str(user_id))}` — "
-                f"username: `{escape_markdown_v2(u)}` — firstname: `{escape_markdown_v2(fn)}` — last_name: `{escape_markdown_v2(ln)}`"
+                f"{ts} — `{uid}` *{status}*: "
+                f"username: `{username}` firstname: {first_name} lastname: {last_name}"
             )
         else:
-            # Atualização, exibe só campos que mudaram
-            partes: list[str] = []
-            if 'username' in campos:
-                partes.append(f"username: `{escape_markdown_v2(campos['username'])}`")
-            if 'first_name' in campos:
-                partes.append(f"firstname: `{escape_markdown_v2(campos['first_name'])}`")
-            if 'last_name' in campos:
-                partes.append(f"last_name: `{escape_markdown_v2(campos['last_name'])}`")
-            partes_txt = " — ".join(partes)
             lines.append(
-                f"{ts} — ATUALIZADO — ID: `{escape_markdown_v2(str(user_id))}` — {partes_txt}"
+                f"{ts} — *{status}*: "
+                f"username: `{username}` firstname: {first_name} lastname: {last_name}"
             )
+
 
     # 6) Paginação com chunking
     texto = "\n".join(lines)
+
+    # 6) Chunking e paginação (único bloco)
+    lines = texto.splitlines()
     chunks, cur, size = [], [], 0
-    for line in texto.splitlines():
+    for line in lines:
         if size + len(line) + 1 > MAX_MESSAGE_LENGTH:
             chunks.append("\n".join(cur))
             cur, size = [line], len(line) + 1
@@ -1047,9 +1100,12 @@ async def historico_usuario(update: Update, context: CallbackContext):
 
     botoes = []
     if page > 1:
-        botoes.append(InlineKeyboardButton("◀️ Anterior", callback_data=f"hist:{target_id or 0}:{page-1}"))
+        botoes.append(InlineKeyboardButton("◀️ Anterior",
+                                           callback_data=f"hist:{target_id or 0}:{page - 1}"))
     if tem_mais:
-        botoes.append(InlineKeyboardButton("Próximo ▶️", callback_data=f"hist:{target_id or 0}:{page+1}"))
+        botoes.append(InlineKeyboardButton("Próximo ▶️",
+                                           callback_data=f"hist:{target_id or 0}:{page + 1}"))
+
     markup = InlineKeyboardMarkup([botoes]) if botoes else None
 
     for idx, chunk in enumerate(chunks):
@@ -1058,7 +1114,8 @@ async def historico_usuario(update: Update, context: CallbackContext):
         else:
             await update.message.reply_text(chunk, parse_mode="MarkdownV2")
 
-    # Log de auditoria
+
+    # 7) Log de auditoria
     logger.info(
         "Admin %s consultou histórico %s (page %d)",
         requester_id,
