@@ -11,9 +11,8 @@ import csv
 import io
 import math
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile
-from telegram.ext import CallbackQueryHandler
 from telegram import Update, Bot
-from telegram.ext import ApplicationHandlerStop
+from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler
 from typing import Dict, Any
 from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder, ContextTypes
@@ -78,7 +77,6 @@ else:
 
 
 TEMPO_LIMITE_BUSCA = 5          # Tempo máximo (em segundos) para consulta
-PAGE_SIZE = 20             # Número de usuários por página
 
 
 async def init_db_pool():
@@ -119,15 +117,27 @@ async def init_db_pool():
             id SERIAL PRIMARY KEY,
             palavra TEXT UNIQUE NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS usuario_history (
+            id           SERIAL    PRIMARY KEY,
+            user_id      BIGINT    NOT NULL REFERENCES usuarios(user_id),
+            campo        TEXT      NOT NULL,
+            valor_antigo TEXT,
+            valor_novo   TEXT,
+            criado_em    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
         """)
 
 # --- Helpers de usuário (asyncpg) ---
-async def adicionar_usuario_db(pool, user_id: int, username: str, first_name: str):
+PAGE_SIZE = 30
+MAX_MESSAGE_LENGTH = 4000
+HISTORICO_USER_ID = 4
+
+async def adicionar_usuario_db(pool, user_id: int, username: str, first_name: str, last_name: str = "vazio"):
     async with pool.acquire() as conn:
         async with conn.transaction():
             # 1) tenta buscar registro antigo
             old = await conn.fetchrow(
-                "SELECT username, first_name FROM usuarios WHERE user_id = $1::bigint",
+                "SELECT username, first_name, last_name FROM usuarios WHERE user_id = $1::bigint",
                 user_id
             )
 
@@ -135,20 +145,22 @@ async def adicionar_usuario_db(pool, user_id: int, username: str, first_name: st
                 # LOG antes do UPDATE
                 logger.info(
                     f"[DB] Usuário {user_id} existe: atualizando de "
-                    f"({old['username']}, {old['first_name']}) para ({username}, {first_name})"
+                    f"({old['username']}, {old['first_name']}, {old['last_name']}) para "
+                    f"({username}, {first_name}, {last_name})"
                 )
-                # UPDATE forçando BIGINT no WHERE
+                # UPDATE para username, first_name e last_name
                 await conn.execute(
                     """
                     UPDATE usuarios
                        SET username   = $1,
-                           first_name = $2
-                     WHERE user_id = $3::bigint
+                           first_name = $2,
+                           last_name  = $3
+                     WHERE user_id = $4::bigint
                     """,
-                    username, first_name, user_id
+                    username or '', first_name or '', last_name or '', user_id
                 )
 
-                # histórico de cada mudança (já espera int)
+                # histórico de cada mudança
                 if old['username'] != username:
                     await conn.execute(
                         """
@@ -156,7 +168,7 @@ async def adicionar_usuario_db(pool, user_id: int, username: str, first_name: st
                           (user_id, campo, valor_antigo, valor_novo, criado_em)
                         VALUES ($1::bigint, 'username', $2, $3, now())
                         """,
-                        user_id, old['username'], username
+                        user_id, old['username'] or '', username or ''
                     )
                 if old['first_name'] != first_name:
                     await conn.execute(
@@ -165,39 +177,56 @@ async def adicionar_usuario_db(pool, user_id: int, username: str, first_name: st
                           (user_id, campo, valor_antigo, valor_novo, criado_em)
                         VALUES ($1::bigint, 'first_name', $2, $3, now())
                         """,
-                        user_id, old['first_name'], first_name
+                        user_id, old['first_name'] or '', first_name or ''
+                    )
+                if old['last_name'] != last_name:
+                    await conn.execute(
+                        """
+                        INSERT INTO usuario_history
+                          (user_id, campo, valor_antigo, valor_novo, criado_em)
+                        VALUES ($1::bigint, 'last_name', $2, $3, now())
+                        """,
+                        user_id, old['last_name'] or '', last_name or ''
                     )
 
             else:
                 # LOG antes do INSERT
                 logger.info(
-                    f"[DB] Usuário {user_id} não existe: inserindo ({username}, {first_name})"
+                    f"[DB] Usuário {user_id} não existe: inserindo ({username}, {first_name}, {last_name})"
                 )
-                # INSERT forçando BIGINT no VALUES
+                # INSERT no banco
                 await conn.execute(
                     """
-                    INSERT INTO usuarios(user_id, username, first_name)
-                    VALUES($1::bigint, $2, $3)
+                    INSERT INTO usuarios(user_id, username, first_name, last_name)
+                    VALUES($1::bigint, $2, $3, $4)
                     """,
-                    user_id, username, first_name
+                    user_id, username or '', first_name or '', last_name or ''
                 )
-                # histórico de novo usuário: registra ambos os campos
+                # histórico: registrar cada campo separadamente
                 await conn.execute(
-                        """
+                    """
                     INSERT INTO usuario_history
                       (user_id, campo, valor_antigo, valor_novo, criado_em)
-                    VALUES ($1::bigint, 'INSERT', NULL, $2, now())
+                    VALUES ($1::bigint, 'username', NULL, $2, now())
                     """,
-                        user_id, username or ""
-                                  )
+                    user_id, username or ''
+                )
                 await conn.execute(
-                        """
+                    """
                     INSERT INTO usuario_history
                       (user_id, campo, valor_antigo, valor_novo, criado_em)
-                    VALUES ($1::bigint, 'INSERT', NULL, $2, now())
+                    VALUES ($1::bigint, 'first_name', NULL, $2, now())
                     """,
-                        user_id, first_name or ""
-                                  )
+                    user_id, first_name or ''
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO usuario_history
+                      (user_id, campo, valor_antigo, valor_novo, criado_em)
+                    VALUES ($1::bigint, 'last_name', NULL, $2, now())
+                    """,
+                    user_id, last_name or ''
+                )
 
 async def obter_usuario_db(user_id: int) -> asyncpg.Record | None:
     """
@@ -452,6 +481,7 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔒 Digite a senha de admin:")
     return ADMIN_SENHA
 
+
 async def tratar_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text.strip() == str(ADMIN_PASSWORD):
         context.user_data["is_admin"] = True
@@ -649,11 +679,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         adicionar_usuario_db(
             pool,
             user.id,
-            user.username or "",
-            user.first_name or ""
+            user.username or "vazio",
+            user.first_name or "vazio",
+            user.last_name or "vazio"
         )
     )
-
     await update.message.reply_text(
         "🤖 Olá! Bem-vindo ao Bot de Pontuação da @cupomnavitrine.\n\n"
         "Para começar abra o menu lateral ou digite um comando."
@@ -850,7 +880,7 @@ async def tratar_presenca(update, context):
     user = update.effective_user
 
     # 1) Garante que exista sem logar toda vez
-    await adicionar_usuario_db(pool, user.id, user.username or "", user.first_name or "")
+    await adicionar_usuario_db(pool, user.id, user.username or "vazio", user.first_name or "vazio", user.last_name  or "vazio")
 
     # 2) Busca registro completo
     reg = await obter_usuario_db(user.id)
@@ -874,10 +904,7 @@ async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
-PAGE_SIZE = 20
-MAX_MESSAGE_LENGTH = 4000
-HISTORICO_USER_ID = 4
-
++DELIM = '|'  # separador para valor_novo agregado
 async def historico_usuario(update: Update, context: CallbackContext):
     # 0) Autenticação de admin
     requester_id = update.effective_user.id
@@ -885,13 +912,17 @@ async def historico_usuario(update: Update, context: CallbackContext):
         await update.message.reply_text("🔒 Você precisa autenticar: use /admin primeiro.")
         return ConversationHandler.END
 
+    is_callback = getattr(update, "callback_query", None) is not None
+    if not is_callback:
+        await update.message.reply_text("ℹ️ Se precisar de ajuda, digite /historico_usuario ajuda")
+
     # Ajuda / instruções
     AJUDA_HISTORICO = (
         "*📘 Ajuda: /historico_usuario*\n\n"
         "Este comando retorna o histórico de alterações dos usuários.\n\n"
         "*Formas de uso:*\n"
-        "`/historico_usuario` – Mostra a 1ª página do histórico completo (todos os usuários).\n"
-        "`/historico_usuario <user_id>` – Mostra a 1ª página do histórico de um usuário.\n"
+        "`/historico_usuario` – Mostra os usuarios sem filtro.\n"
+        "`/historico_usuario <user_id>` – Mostra a página do histórico de um usuário.\n"
         "`/historico_usuario <user_id> <página>` – Página desejada do histórico.\n\n"
         "*Exemplos:*\n"
         "`/historico_usuario`\n"
@@ -902,20 +933,33 @@ async def historico_usuario(update: Update, context: CallbackContext):
 
     # 1) Parsing de argumentos
     args = context.args or []
-    # Sem argumentos => histórico global
+    if len(args) == 1 and args[0].lower() == "ajuda":
+        # exibe o texto de ajuda e termina a conversa
+        await update.message.reply_text(
+            AJUDA_HISTORICO,
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
+
+    # inicialização segura
+    target_id = None
+    page = 1
+
     if len(args) == 0:
         target_id = None
         page = 1
-    # Com 1 argumento => user_id
+    # botão “Próximo/Anterior”: um único arg → página
+    elif len(args) == 1 and args[0].isdigit() and is_callback:
+        page = int(args[0])
+    # comando normal: um único arg → user_id
     elif len(args) == 1 and args[0].isdigit():
         target_id = int(args[0])
-        page = 1
-    # Com 2 argumentos => user_id + página
-    elif len(args) == 2 and args[0].isdigit() and args[1].isdigit() and int(args[1]) > 0:
+
+    elif len(args) == 2 and args[0].isdigit() and args[1].isdigit():
         target_id = int(args[0])
         page = int(args[1])
     else:
-        await update.message.reply_text(AJUDA_HISTORICO, parse_mode="MarkdownV2")
+        await update.message.reply_text("❌ Uso incorreto digite '/historico_usuario ajuda  '.")
         return
 
     offset = (page - 1) * PAGE_SIZE
@@ -928,8 +972,10 @@ async def historico_usuario(update: Update, context: CallbackContext):
             " ORDER BY criado_em DESC"
             " LIMIT $1 OFFSET $2"
         )
-        params = (PAGE_SIZE, offset)
-        header_txt = escape_markdown_v2(f"🕒 Histórico completo (todos os usuários, página {page}):")
+        params = (PAGE_SIZE + 1, offset)
+        header_txt = escape_markdown_v2(
+            f"🕒 Histórico completo (todos os usuários, página {page}):"
+        )
     else:
         sql = (
             "SELECT user_id, campo, valor_antigo, valor_novo, criado_em"
@@ -938,7 +984,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
             " ORDER BY criado_em DESC"
             " LIMIT $2 OFFSET $3"
         )
-        params = (target_id, PAGE_SIZE, offset)
+        params = (target_id, PAGE_SIZE + 1, offset)
         header_txt = escape_markdown_v2(
             f"🕒 Histórico de alterações para `{target_id}` "
             f"(página {page}, {PAGE_SIZE} por página):"
@@ -947,6 +993,8 @@ async def historico_usuario(update: Update, context: CallbackContext):
     # 3) Execução da query
     try:
         rows = await pool.fetch(sql, *params)
+        tem_mais = len(rows) > PAGE_SIZE
+        rows = rows[:PAGE_SIZE]
     except (asyncpg.CannotConnectNowError,
             asyncpg.ConnectionDoesNotExistError,
             asyncpg.PostgresError) as db_err:
@@ -966,65 +1014,88 @@ async def historico_usuario(update: Update, context: CallbackContext):
     if not rows:
         msg = (
             f"ℹ️ Sem histórico de alterações "
-            f"{'para o user_id ' + str(target_id) + ' ' if target_id else ''}"  
+            f"{'para o user_id ' + str(target_id) + ' ' if target_id else ''}"
             f"na página {page}."
         )
         await update.message.reply_text(msg)
         return
 
-    # 5) Monta texto de saída
-    lines = [header_txt]
-    insert_map: Dict[int, Dict[str, Any]] = {}  # agrupa INSERTs por user_id
+    from collections import OrderedDict
 
+    # 5) Monta texto de saída agrupando por (user_id, criado_em)
+    grupos = OrderedDict()
     for r in rows:
-        ts = r["criado_em"].strftime("%d/%m/%Y %H:%M")
-        uid = r["user_id"]
-        raw_op = r["campo"]
-        antigo = r["valor_antigo"]
-        novo = r["valor_novo"]
+        chave = (r['user_id'], r['criado_em'])
+        if chave not in grupos:
+            grupos[chave] = {}
+        grupos[chave][r['campo']] = r['valor_novo']
 
-        if raw_op == "INSERT":
-            # agrupa username e first_name de um mesmo INSERT
-            insert_map.setdefault(uid, {"ts": ts, "vals": []})["vals"].append(novo)
-        else:
-            # UPDATE ou DELETE: uma linha por campo
-            campo_label = escape_markdown_v2(raw_op)
-            antigo_txt = escape_markdown_v2(antigo or "não tem")
-            novo_txt = escape_markdown_v2(novo or "não tem")
-            if target_id is None:
-                lines.append(f"{ts} — `{uid}` *{campo_label}*: `{antigo_txt}` → `{novo_txt}`")
-            else:
-                lines.append(f"{ts} — *{campo_label}*: `{antigo_txt}` → `{novo_txt}`")
+    lines = [escape_markdown_v2(header_txt)]
+    for (user_id, criado_em), campos in grupos.items():
+        ts = criado_em.strftime("%d/%m/%Y %H:%M")
 
-    # adiciona as linhas agrupadas de INSERT, sempre mostrando username → first_name
-    for uid, info in insert_map.items():
-        ts = info["ts"]
-        vals = info["vals"]
-        username = escape_markdown_v2(vals[0] or "não tem")
-        first_name = escape_markdown_v2(vals[1] if len(vals) > 1 else "não tem")
-        if target_id is None:
-            lines.append(f"{ts} — `{uid}` *Inserido*: `{username}` → {first_name}")
-        else:
-            lines.append(f"{ts} — *Inserido*: `{username}` → {first_name}")
+        # Detecta se é inserção (algum valor_antigo = None)
+        insercao = any(
+            r['valor_antigo'] is None
+            for r in rows
+            if (r['user_id'], r['criado_em']) == (user_id, criado_em)
+        )
 
+        tipo = "Inserido" if insercao else "Atualizado"
+
+        username = escape_markdown_v2(campos.get('username') or "vazio")
+        firstname = escape_markdown_v2(campos.get('first_name') or "vazio")
+        lastname = escape_markdown_v2(campos.get('last_name') or "vazio")
+        user_id_fmt = escape_markdown_v2(str(user_id))
+
+        lines.append(
+            f"{ts} — *{tipo}* — ID: `{user_id_fmt}` — "
+            f"username: `{username}` — first_name: `{firstname}` — last_name: `{lastname}`"
+        )
+
+    # depois, concatenar e enviar exatamente igual ao que você já tem:
     texto = "\n".join(lines)
+    botoes = []
+    if page > 1:
+        botoes.append(
+            InlineKeyboardButton("◀️ Anterior", callback_data=f"hist:{target_id or 0}:{page - 1}")
+        )
+    if tem_mais:
+        botoes.append(
+            InlineKeyboardButton("Próximo ▶️", callback_data=f"hist:{target_id or 0}:{page + 1}")
+        )
 
-    # 6) Chunking de mensagens longas
-    if len(texto) > MAX_MESSAGE_LENGTH:
-        chunks, current, size = [], [], 0
-        for line in lines:
+    markup = InlineKeyboardMarkup([botoes]) if botoes else None
+
+    # 6) Chunking e paginação (único bloco)
+    lines = texto.splitlines()
+    chunks, cur, size = [], [], 0
+    for line in lines:
+        if size + len(line) + 1 > MAX_MESSAGE_LENGTH:
+            chunks.append("\n".join(cur))
+            cur, size = [line], len(line) + 1
+        else:
+            cur.append(line)
             size += len(line) + 1
-            if size > MAX_MESSAGE_LENGTH:
-                chunks.append("\n".join(current))
-                current, size = [line], len(line) + 1
-            else:
-                current.append(line)
-        if current:
-            chunks.append("\n".join(current))
-        for chunk in chunks:
+    if cur:
+        chunks.append("\n".join(cur))
+
+    botoes = []
+    if page > 1:
+        botoes.append(InlineKeyboardButton("◀️ Anterior",
+                                           callback_data=f"hist:{target_id or 0}:{page - 1}"))
+    if tem_mais:
+        botoes.append(InlineKeyboardButton("Próximo ▶️",
+                                           callback_data=f"hist:{target_id or 0}:{page + 1}"))
+
+    markup = InlineKeyboardMarkup([botoes]) if botoes else None
+
+    for idx, chunk in enumerate(chunks):
+        if idx == len(chunks) - 1 and markup:
+            await update.message.reply_text(chunk, parse_mode="MarkdownV2", reply_markup=markup)
+        else:
             await update.message.reply_text(chunk, parse_mode="MarkdownV2")
-    else:
-        await update.message.reply_text(texto, parse_mode="MarkdownV2")
+
 
     # 7) Log de auditoria
     logger.info(
@@ -1033,6 +1104,38 @@ async def historico_usuario(update: Update, context: CallbackContext):
         target_id or 'global',
         page
     )
+
+async def callback_historico(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        prefixo, user_id_str, page_str = query.data.split(":")
+        if prefixo != "hist":
+            return
+        target_id = int(user_id_str)
+        page = int(page_str)
+    except Exception:
+        await query.edit_message_text("❌ Erro ao processar paginação.")
+        return
+
+    # Simula um update.message para reutilizar a lógica
+    class FakeUpdate:
+        def __init__(self, user, message, callback_query):
+            self.effective_user = user
+            self.message = message
+            self.callback_query = callback_query
+    # Verifica autenticação (usando o mesmo mét odo da função principal)
+    requester_id = query.from_user.id
+    if not context.user_data.get("is_admin"):
+        await query.edit_message_text("🔒 Você precisa autenticar com /admin.")
+        return
+
+    # Rechama a função original reutilizando os parâmetros
+    fake_update = FakeUpdate(query.from_user, query.message, query)
+    context.args = [str(target_id)] if target_id != 0 else []
+    context.args.append(str(page))
+    await historico_usuario(fake_update, context)
 
 
 async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1310,6 +1413,7 @@ if __name__ == '__main__':
     # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
+    app.add_handler(CallbackQueryHandler(callback_historico, pattern=r"^hist:\d+:\d+$"))
 
     logger.info("🔄 Iniciando polling...")
     try:
