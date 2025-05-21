@@ -3,6 +3,8 @@ import re
 import sys
 import asyncpg
 import logging
+import itertools
+from operator import attrgetter  # ou itemgetter
 from datetime import date
 from time import perf_counter
 from asyncpg import UniqueViolationError, PostgresError, CannotConnectNowError, ConnectionDoesNotExistError
@@ -76,7 +78,7 @@ else:
 ) = range(16)
 
 
-TEMPO_LIMITE_BUSCA = 5          # Tempo máximo (em segundos) para consulta
+TEMPO_LIMITE_BUSCA = 10          # Tempo máximo (em segundos) para consulta
 
 
 async def init_db_pool():
@@ -132,10 +134,16 @@ PAGE_SIZE = 30
 MAX_MESSAGE_LENGTH = 4000
 HISTORICO_USER_ID = 4
 
-async def adicionar_usuario_db(pool, user_id: int, username: str, first_name: str, last_name: str = "vazio"):
-    async with pool.acquire() as conn:
+async def adicionar_usuario_db(
+    user_id: int,
+    username: str,
+    first_name: str,
+    last_name: str = "vazio",
+    pool_override: asyncpg.Pool | None = None,
+):
+    pg = pool_override or pool
+    async with pg.acquire() as conn:
         async with conn.transaction():
-            # 1) tenta buscar registro antigo
             old = await conn.fetchrow(
                 "SELECT username, first_name, last_name FROM usuarios WHERE user_id = $1::bigint",
                 user_id
@@ -193,6 +201,15 @@ async def adicionar_usuario_db(pool, user_id: int, username: str, first_name: st
                 # LOG antes do INSERT
                 logger.info(
                     f"[DB] Usuário {user_id} não existe: inserindo ({username}, {first_name}, {last_name})"
+                )
+                # 1) Marca a criação no histórico
+                await conn.execute(
+                    """
+                    INSERT INTO usuario_history
+                    (user_id, campo, valor_antigo, valor_novo, criado_em)
+                    VALUES ($1::bigint, 'INSERT', NULL, 'registro criado', now())
+                    """,
+                    user_id
                 )
                 # INSERT no banco
                 await conn.execute(
@@ -677,7 +694,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # dispara em background ou await, como preferir
     asyncio.create_task(
         adicionar_usuario_db(
-            pool,
             user.id,
             user.username or "vazio",
             user.first_name or "vazio",
@@ -698,17 +714,20 @@ async def meus_pontos(update: Update, context: CallbackContext):
 
     try:
         # Tenta inserir ou atualizar o usuário
-        await adicionar_usuario_db(user.id, user.username)
+        await adicionar_usuario_db(
+            user.id,
+            user.username or "vazio",
+            user.first_name or "vazio",
+            user.last_name or "vazio"
+        )
         # Tenta buscar os dados de pontos e nível
         u = await obter_usuario_db(user.id)
-
     except Exception as e:
         # Aqui você pode usar logger.error(e) para registrar a stack
         await update.message.reply_text(
             "❌ Desculpe, tivemos um problema ao acessar as suas informações. Tente novamente mais tarde. se o problema persistir contate o suporte."
         )
         return
-
     # Se tudo ocorreu bem, respondemos normalmente
     await update.message.reply_text(
         f"🎉 Você tem {u['pontos']} pontos (Nível {u['nivel_atingido']})."
@@ -880,7 +899,7 @@ async def tratar_presenca(update, context):
     user = update.effective_user
 
     # 1) Garante que exista sem logar toda vez
-    await adicionar_usuario_db(pool, user.id, user.username or "vazio", user.first_name or "vazio", user.last_name  or "vazio")
+    await adicionar_usuario_db(user.id, user.username or "vazio", user.first_name or "vazio", user.last_name  or "vazio")
 
     # 2) Busca registro completo
     reg = await obter_usuario_db(user.id)
@@ -939,7 +958,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
         # exibe o texto de ajuda e termina a conversa
         await update.message.reply_text(
             AJUDA_HISTORICO,
-            parse_mode="Markdown"
+            parse_mode="MarkdownV2"
         )
         return ConversationHandler.END
 
