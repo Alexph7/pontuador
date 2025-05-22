@@ -4,6 +4,7 @@ import sys
 import asyncpg
 import logging
 import itertools
+import nest_asyncio
 from operator import attrgetter  # ou itemgetter
 from datetime import date
 from time import perf_counter
@@ -1041,66 +1042,42 @@ async def historico_usuario(update: Update, context: CallbackContext):
         await update.message.reply_text(msg)
         return
 
-    # 5) Monta texto de saída
+    def truncate_ts(ts):
+        return ts.replace(second=0, microsecond=0)  # Agrupamento por minuto
+
     lines = [header_txt]
-    insert_map: Dict[int, Dict[str, Any]] = {}
 
-    for r in rows:
-        ts = r["criado_em"].strftime("%d/%m/%Y %H:%M")
-        uid = r["user_id"]
-        campo = r["campo"]
-        novo = r["valor_novo"]
+    # 5) Agrupamento por timestamp “truncado”
+    for ts, group in itertools.groupby(rows, key=lambda r: truncate_ts(r["criado_em"])):
+        entries = list(group)
+        ts_str = ts.strftime("%d/%m/%Y %H:%M")
 
-        # inicializa estrutura
-        insert_map.setdefault(uid, {
-            "ts": ts,
-            "username": None,
-            "first_name": None,
-            "last_name": None,
-            "status": None,
-        })
+        # Coleta valores dos campos alterados
+        info = {"username": None, "first_name": None, "last_name": None}
+        for r in entries:
+            campo = r["campo"]
+            valor = r["valor_novo"] or ""
+            if campo in info:
+                info[campo] = valor
 
-        if campo == "INSERT":
-            # novo cadastro
-            insert_map[uid]["status"] = "Inserido"
-            # tenta preencher campos na ordem username, first_name, last_name
-            if insert_map[uid]["username"] is None:
-                insert_map[uid]["username"] = novo
-            elif insert_map[uid]["first_name"] is None:
-                insert_map[uid]["first_name"] = novo
-            else:
-                insert_map[uid]["last_name"] = novo
+        prefix = "Inserido" if any(r["campo"] == "INSERT" for r in entries) else "Atualizado"
 
-        else:
-            # atualização de campo
-            insert_map[uid]["status"] = "Atualizado"
-            if campo == "username":
-                insert_map[uid]["username"] = novo
-            elif campo == "first_name":
-                insert_map[uid]["first_name"] = novo
-            elif campo == "last_name":
-                insert_map[uid]["last_name"] = novo
-
-    # adiciona linhas formatadas
-    for uid, info in insert_map.items():
-        ts = info["ts"]
-        status = info.get("status", "Atualizado")
-        username = escape_markdown_v2(info["username"] or "não tem")
-        first_name = escape_markdown_v2(info["first_name"] or "não tem")
-        last_name = escape_markdown_v2(info["last_name"] or "não tem")
-
+        # Monta linha de saída
         if target_id is None:
+            uid = entries[0]["user_id"]
             lines.append(
-                f"{ts} — `{uid}` *{status}*: "
-                f"username: `{username}` firstname: {first_name} lastname: {last_name}"
+                f"{ts_str} — `{uid}` *{prefix}*: "
+                f"username: `{escape_markdown_v2(info['username'] or 'vazio')}` "
+                f"firstname: `{escape_markdown_v2(info['first_name'] or 'vazio')}` "
+                f"lastname: `{escape_markdown_v2(info['last_name'] or 'vazio')}`"
             )
         else:
             lines.append(
-                f"{ts} — *{status}*: "
-                f"username: `{username}` firstname: {first_name} lastname: {last_name}"
+                f"{ts_str} — *{prefix}*: "
+                f"username: `{escape_markdown_v2(info['username'] or 'vazio')}` "
+                f"firstname: `{escape_markdown_v2(info['first_name'] or 'vazio')}` "
+                f"lastname: `{escape_markdown_v2(info['last_name'] or 'vazio')}`"
             )
-
-
     # 6) Paginação com chunking
     texto = "\n".join(lines)
 
@@ -1416,11 +1393,10 @@ main_conv = ConversationHandler(
 )
 
 # --- Inicialização do bot ---
-if __name__ == '__main__':
+async def main():
 
     # 1) inicializa o pool ANTES de criar o Application
-    asyncio.get_event_loop().run_until_complete(init_db_pool())
-
+    await init_db_pool()
     # 2) agora monte o bot
     app = (
         ApplicationBuilder()
@@ -1453,7 +1429,12 @@ if __name__ == '__main__':
     app.add_handler(CallbackQueryHandler(callback_historico, pattern=r"^hist:\d+:\d+$"))
 
     logger.info("🔄 Iniciando polling...")
+    await app.run_polling()
+
+if __name__ == "__main__":
+
     try:
-        app.run_polling()
+        nest_asyncio.apply()
+        asyncio.get_event_loop().run_until_complete(main())
     except Exception:
         logger.exception("❌ Erro durante run_polling")
