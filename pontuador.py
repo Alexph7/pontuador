@@ -931,187 +931,162 @@ async def historico_usuario(update: Update, context: CallbackContext):
     # 0) Autenticação de admin
     requester_id = update.effective_user.id
     if not context.user_data.get("is_admin"):
-        await update.message.reply_text("🔒 Você precisa autenticar: use /admin primeiro.")
+        await update.message.reply_text(
+            "🔒 Você precisa autenticar: use /admin primeiro."
+        )
         return ConversationHandler.END
 
+    # 1) Detecta callback ou comando normal
     is_callback = getattr(update, "callback_query", None) is not None
     if not is_callback:
-        await update.message.reply_text("ℹ️ Se precisar de ajuda, digite /historico_usuario ajuda")
+        await update.message.reply_text(
+            "ℹ️ Se precisar de ajuda, digite /historico_usuario ajuda"
+        )
 
-    # Ajuda / instruções
+    # 2) Texto de ajuda (exibido só em `/ajuda`)
     AJUDA_HISTORICO = (
         "*📘 Ajuda: /historico_usuario*\n\n"
         "Este comando retorna o histórico de alterações dos usuários.\n\n"
         "*Formas de uso:*\n"
-        "`/historico_usuario` – Mostra os usuarios sem filtro.\n"
-        "`/historico_usuario <user_id>` – Mostra a página do histórico de um usuário.\n"
-        "`/historico_usuario <user_id> <página>` – Página desejada do histórico.\n\n"
+        "`/historico_usuario` – Mostra os usuários sem filtro.\n"
+        "`/historico_usuario <user_id>` – Mostra o histórico de um usuário.\n"
+        "`/historico_usuario <user_id> <página>` – Página desejada.\n\n"
         "*Exemplos:*\n"
         "`/historico_usuario`\n"
         "`/historico_usuario 123456789`\n"
         "`/historico_usuario 123456789 2`\n\n"
         f"*ℹ️ Cada página exibe até {PAGE_SIZE} registros.*"
     )
-
-    # 1) Parsing de argumentos
     args = context.args or []
     if len(args) == 1 and args[0].lower() == "ajuda":
-        # exibe o texto de ajuda e termina a conversa
         await update.message.reply_text(
-            AJUDA_HISTORICO,
+            AJUDA_HISTORICO, parse_mode="MarkdownV2"
+        )
+        return ConversationHandler.END
+
+    # 3) Parsing de arguments: target_id e page
+    target_id = None
+    page = 1
+    if len(args) == 1 and args[0].isdigit() and is_callback:
+        page = int(args[0])
+    elif len(args) == 1 and args[0].isdigit():
+        target_id = int(args[0])
+    elif len(args) == 2 and args[0].isdigit() and args[1].isdigit():
+        target_id, page = int(args[0]), int(args[1])
+    elif args:
+        await update.message.reply_text(
+            "❌ Uso incorreto. Digite `/historico_usuario ajuda`.",
             parse_mode="MarkdownV2"
         )
         return ConversationHandler.END
 
-    # inicialização segura
-    target_id = None
-    page = 1
-
-    if len(args) == 0:
-        target_id = None
-        page = 1
-    # botão “Próximo/Anterior”: um único arg → página
-    elif len(args) == 1 and args[0].isdigit() and is_callback:
-        page = int(args[0])
-    # comando normal: um único arg → user_id
-    elif len(args) == 1 and args[0].isdigit():
-        target_id = int(args[0])
-
-    elif len(args) == 2 and args[0].isdigit() and args[1].isdigit():
-        target_id = int(args[0])
-        page = int(args[1])
-    else:
-        await update.message.reply_text("❌ Uso incorreto digite '/historico_usuario ajuda  '.")
-        return
-
     offset = (page - 1) * PAGE_SIZE
 
-    # 2) Construção da query dinâmica
+    # 4) Monta SQL com ordenação determinística
     if target_id is None:
         sql = (
-            "SELECT user_id, campo, valor_antigo, valor_novo, criado_em"
+            "SELECT id, user_id, campo, valor_novo, criado_em"
             " FROM usuario_history"
-            " ORDER BY criado_em DESC"
+            " ORDER BY criado_em DESC, id DESC"
             " LIMIT $1 OFFSET $2"
         )
         params = (PAGE_SIZE + 1, offset)
-        header_txt = escape_markdown_v2(
-            f"🕒 Histórico completo (todos os usuários, página {page}):"
-        )
+        header = f"🕒 Histórico completo (todos os usuários, página {page}):"
     else:
         sql = (
-            "SELECT user_id, campo, valor_antigo, valor_novo, criado_em"
+            "SELECT id, user_id, campo, valor_novo, criado_em"
             " FROM usuario_history"
             " WHERE user_id = $1"
-            " ORDER BY criado_em DESC"
+            " ORDER BY criado_em DESC, id DESC"
             " LIMIT $2 OFFSET $3"
         )
         params = (target_id, PAGE_SIZE + 1, offset)
-        header_txt = escape_markdown_v2(
+        header = (
             f"🕒 Histórico de alterações para `{target_id}` "
             f"(página {page}, {PAGE_SIZE} por página):"
         )
 
-    # 3) Execução da query
+    # 5) Execução e slice
     try:
         rows = await pool.fetch(sql, *params)
-        tem_mais = len(rows) > PAGE_SIZE
-        rows = rows[:PAGE_SIZE]
     except (asyncpg.CannotConnectNowError,
             asyncpg.ConnectionDoesNotExistError,
-            asyncpg.PostgresError) as db_err:
-        logger.error("Erro ao buscar histórico %s: %s", target_id or 'global', db_err)
-        await update.message.reply_text(
-            "❌ Não foi possível acessar o histórico no momento. Tente novamente mais tarde."
+            asyncpg.PostgresError) as err:
+        logger.error(
+            "Erro ao buscar histórico %s: %s",
+            target_id or 'global', err
         )
-        return
-    except Exception:
-        logger.exception("Erro inesperado ao buscar histórico %s", target_id or 'global')
         await update.message.reply_text(
-            "❌ Ocorreu um erro inesperado. Tente novamente mais tarde."
+            "❌ Não foi possível acessar o histórico no momento. "
+            "Tente novamente mais tarde."
         )
         return
 
-    # 4) Sem registros
+    tem_mais = len(rows) > PAGE_SIZE
+    rows = rows[:PAGE_SIZE]
+
+    # 6) Sem registros
     if not rows:
-        msg = (
-            f"ℹ️ Sem histórico de alterações "
-            f"{'para o user_id ' + str(target_id) + ' ' if target_id else ''}"
-            f"na página {page}."
+        alvo = f" para `{target_id}`" if target_id else ""
+        await update.message.reply_text(
+            f"ℹ️ Sem histórico{alvo} na página {page}."
         )
-        await update.message.reply_text(msg)
         return
 
-    def truncate_ts(ts):
-        return ts.replace(second=0, microsecond=0)  # Agrupamento por minuto
+    # 7) Monta linhas (sequencial, sem agrupamento)
+    lines = [escape_markdown_v2(header)]
+    for r in rows:
+        ts_str = r["criado_em"].strftime("%d/%m %H:%M")
 
-    lines = [header_txt]
-
-    # 5) Agrupamento por timestamp “truncado”
-    for ts, group in itertools.groupby(rows, key=lambda r: truncate_ts(r["criado_em"])):
-        entries = list(group)
-        ts_str = ts.strftime("%d/%m/%Y %H:%M")
-
-        # Coleta valores dos campos alterados
+        # Reconstrói campos relevantes
         info = {"username": None, "first_name": None, "last_name": None}
-        for r in entries:
-            campo = r["campo"]
-            valor = r["valor_novo"] or ""
-            if campo in info:
-                info[campo] = valor
+        if r["campo"] in info:
+            info[r["campo"]] = r["valor_novo"] or ""
 
-        prefix = "Inserido" if any(r["campo"] == "INSERT" for r in entries) else "Atualizado"
+        # Prefixo Inserido vs Atualizado
+        prefix = "Inserido" if r["campo"] == "INSERT" else "Atualizado"
 
-        # Monta linha de saída
-        if target_id is None:
-            uid = entries[0]["user_id"]
-            lines.append(
-                f"{ts_str} — `{uid}` *{prefix}*: "
-                f"username: `{escape_markdown_v2(info['username'] or 'vazio')}` "
-                f"firstname: `{escape_markdown_v2(info['first_name'] or 'vazio')}` "
-                f"lastname: `{escape_markdown_v2(info['last_name'] or 'vazio')}`"
-            )
-        else:
-            lines.append(
-                f"{ts_str} — *{prefix}*: "
-                f"username: `{escape_markdown_v2(info['username'] or 'vazio')}` "
-                f"firstname: `{escape_markdown_v2(info['first_name'] or 'vazio')}` "
-                f"lastname: `{escape_markdown_v2(info['last_name'] or 'vazio')}`"
-            )
-    # 6) Paginação com chunking
+        # Parte do usuário
+        user_part = f"`{r['user_id']}` " if target_id is None else ""
+
+        # Linha formatada
+        lines.append(
+            f"{ts_str} — {user_part}*{prefix}*: "
+            f"username: `{escape_markdown_v2(info['username'] or 'vazio')}` "
+            f"firstname: `{escape_markdown_v2(info['first_name'] or 'vazio')}` "
+            f"lastname: `{escape_markdown_v2(info['last_name'] or 'vazio')}`"
+        )
+
     texto = "\n".join(lines)
+    if len(texto) > MAX_MESSAGE_LENGTH:
+        texto = texto[: MAX_MESSAGE_LENGTH - 50] + "\n\n⚠️ Texto truncado..."
 
-    # 6) Chunking e paginação (único bloco)
-    lines = texto.splitlines()
-    chunks, cur, size = [], [], 0
-    for line in lines:
-        if size + len(line) + 1 > MAX_MESSAGE_LENGTH:
-            chunks.append("\n".join(cur))
-            cur, size = [line], len(line) + 1
-        else:
-            cur.append(line)
-            size += len(line) + 1
-    if cur:
-        chunks.append("\n".join(cur))
-
+    # 8) Botões de navegação
     botoes = []
     if page > 1:
-        botoes.append(InlineKeyboardButton("◀️ Anterior",
-                                           callback_data=f"hist:{target_id or 0}:{page - 1}"))
+        botoes.append(
+            InlineKeyboardButton(
+                "◀️ Anterior",
+                callback_data=f"hist:{target_id or 0}:{page-1}"
+            )
+        )
     if tem_mais:
-        botoes.append(InlineKeyboardButton("Próximo ▶️",
-                                           callback_data=f"hist:{target_id or 0}:{page + 1}"))
-
+        botoes.append(
+            InlineKeyboardButton(
+                "Próximo ▶️",
+                callback_data=f"hist:{target_id or 0}:{page+1}"
+            )
+        )
     markup = InlineKeyboardMarkup([botoes]) if botoes else None
 
-    for idx, chunk in enumerate(chunks):
-        if idx == len(chunks) - 1 and markup:
-            await update.message.reply_text(chunk, parse_mode="MarkdownV2", reply_markup=markup)
-        else:
-            await update.message.reply_text(chunk, parse_mode="MarkdownV2")
+    # 9) Envia a resposta
+    await update.message.reply_text(
+        texto,
+        parse_mode="MarkdownV2",
+        reply_markup=markup
+    )
 
-
-    # 7) Log de auditoria
+    # 10) Log de auditoria
     logger.info(
         "Admin %s consultou histórico %s (page %d)",
         requester_id,
