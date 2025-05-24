@@ -6,13 +6,15 @@ import logging
 import itertools
 import nest_asyncio
 from operator import attrgetter  # ou itemgetter
-from datetime import date
 from time import perf_counter
 from asyncpg import UniqueViolationError, PostgresError, CannotConnectNowError, ConnectionDoesNotExistError
 import asyncio
 import csv
 import io
 import math
+import datetime
+from zoneinfo import ZoneInfo
+from datetime import datetime, date
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram import Update, Bot
 from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler
@@ -24,8 +26,7 @@ from telegram.ext import (
     CommandHandler, CallbackContext,
     MessageHandler, filters, ConversationHandler
 )
-from datetime import datetime
-from zoneinfo import ZoneInfo
+
 
 def hoje_sp():
     return datetime.now(tz=ZoneInfo("America/Sao_Paulo")).date()
@@ -78,6 +79,7 @@ else:
     DEL_PALAVRA_PROIBIDA
 ) = range(16)
 
+hoje = hoje_sp()
 
 TEMPO_LIMITE_BUSCA = 10          # Tempo máximo (em segundos) para consulta
 
@@ -88,15 +90,19 @@ async def init_db_pool():
     async with pool.acquire() as conn:
         # Criação de tabelas se não existirem
         await conn.execute("""
-        CREATE TABLE IF NOT EXISTS usuarios (
-            user_id BIGINT PRIMARY KEY,
-            username TEXT,
-            first_name TEXT,
-            pontos INTEGER NOT NULL DEFAULT 0,
-            nivel_atingido INTEGER NOT NULL DEFAULT 0,
-            is_pontuador BOOLEAN NOT NULL DEFAULT FALSE,
-            ultimo_visto DATE
+       CREATE TABLE IF NOT EXISTS usuarios (
+          user_id            BIGINT PRIMARY KEY,
+          username           TEXT,
+          first_name         TEXT,
+          last_name          TEXT,
+          pontos             INTEGER NOT NULL DEFAULT 0,
+          nivel_atingido     INTEGER NOT NULL DEFAULT 0,
+          is_pontuador       BOOLEAN NOT NULL DEFAULT FALSE,
+          ultima_interacao   DATE,                                -- só para pontuar 1x/dia
+          inserido_em          TIMESTAMP NOT NULL DEFAULT NOW(),    -- quando o usuário foi inserido
+          atualizado_em      TIMESTAMP NOT NULL DEFAULT NOW()     -- quando qualquer coluna for atualizada
         );
+
         CREATE TABLE IF NOT EXISTS historico_pontos (
             id SERIAL PRIMARY KEY,
             user_id BIGINT REFERENCES usuarios(user_id),
@@ -109,13 +115,6 @@ async def init_db_pool():
             motivo TEXT,
             data TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        CREATE TABLE IF NOT EXISTS eventos (
-            id SERIAL PRIMARY KEY,
-            nome TEXT,
-            inicio TIMESTAMP,
-            fim TIMESTAMP,
-            multiplicador INTEGER DEFAULT 1
-        );
         CREATE TABLE IF NOT EXISTS palavras_proibidas (
             id SERIAL PRIMARY KEY,
             palavra TEXT UNIQUE NOT NULL
@@ -126,7 +125,7 @@ async def init_db_pool():
             campo        TEXT      NOT NULL,
             valor_antigo TEXT,
             valor_novo   TEXT,
-            criado_em    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            inserido_em    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         """)
 
@@ -143,61 +142,100 @@ async def adicionar_usuario_db(
     pool_override: asyncpg.Pool | None = None,
 ):
     pg = pool_override or pool
+    # hoje é definido fora, globalmente
     async with pg.acquire() as conn:
         async with conn.transaction():
             old = await conn.fetchrow(
-                "SELECT username, first_name, last_name FROM usuarios WHERE user_id = $1::bigint",
+                "SELECT username, first_name, last_name, ultima_interacao "
+                "FROM usuarios WHERE user_id = $1::bigint",
                 user_id
             )
 
             if old:
-                # LOG antes do UPDATE
+                # Verifica o que mudou
+                mudou_username = old['username'] != (username or '')
+                mudou_firstname = old['first_name'] != (first_name or '')
+                mudou_lastname = old['last_name'] != (last_name or '')
+
                 logger.info(
                     f"[DB] Usuário {user_id} existe: atualizando de "
                     f"({old['username']}, {old['first_name']}, {old['last_name']}) para "
                     f"({username}, {first_name}, {last_name})"
                 )
-                # UPDATE para username, first_name e last_name
-                await conn.execute(
-                    """
-                    UPDATE usuarios
-                       SET username   = $1,
-                           first_name = $2,
-                           last_name  = $3
-                     WHERE user_id = $4::bigint
-                    """,
-                    username or '', first_name or '', last_name or '', user_id
-                )
 
-                # histórico de cada mudança
-                if old['username'] != username:
+                # Só executa UPDATE e registra histórico se algo mudou
+                if mudou_username or mudou_firstname or mudou_lastname:
+                    # 1) Atualiza campos e marca timestamp de atualização
                     await conn.execute(
                         """
-                        INSERT INTO usuario_history
-                          (user_id, campo, valor_antigo, valor_novo, criado_em)
-                        VALUES ($1::bigint, 'username', $2, $3, now())
+                        UPDATE usuarios
+                           SET username      = $1,
+                               first_name    = $2,
+                               last_name     = $3,
+                               atualizado_em = NOW()
+                         WHERE user_id      = $4::bigint
                         """,
-                        user_id, old['username'] or '', username or ''
-                    )
-                if old['first_name'] != first_name:
-                    await conn.execute(
-                        """
-                        INSERT INTO usuario_history
-                          (user_id, campo, valor_antigo, valor_novo, criado_em)
-                        VALUES ($1::bigint, 'first_name', $2, $3, now())
-                        """,
-                        user_id, old['first_name'] or '', first_name or ''
-                    )
-                if old['last_name'] != last_name:
-                    await conn.execute(
-                        """
-                        INSERT INTO usuario_history
-                          (user_id, campo, valor_antigo, valor_novo, criado_em)
-                        VALUES ($1::bigint, 'last_name', $2, $3, now())
-                        """,
-                        user_id, old['last_name'] or '', last_name or ''
+                        username or '',
+                        first_name or '',
+                        last_name or '',
+                        user_id
                     )
 
+                    # 2) Só registra ponto diário se ainda não ganhou hoje
+                    if old['ultima_interacao'] != hoje:
+                        await conn.execute(
+                            """
+                            UPDATE usuarios
+                               SET pontos           = pontos + 1,
+                                   ultima_interacao = $1
+                             WHERE user_id         = $2::bigint
+                            """,
+                            hoje,
+                            user_id
+                        )
+                        await conn.execute(
+                            """
+                            INSERT INTO historico_pontos
+                              (user_id, pontos, motivo)
+                            VALUES ($1::bigint, 1, 'ponto diário por atualização')
+                            """,
+                            user_id
+                        )
+
+                    # 3) Histórico de identidade: só para cada campo que mudou
+                    if mudou_username:
+                        await conn.execute(
+                            """
+                            INSERT INTO usuario_history
+                              (user_id, campo, valor_antigo, valor_novo, inserido_em)
+                            VALUES ($1::bigint, 'username', $2, $3, NOW())
+                            """,
+                            user_id,
+                            old['username'] or '',
+                            username or ''
+                        )
+                    if mudou_firstname:
+                        await conn.execute(
+                            """
+                            INSERT INTO usuario_history
+                              (user_id, campo, valor_antigo, valor_novo, inserido_em)
+                            VALUES ($1::bigint, 'first_name', $2, $3, NOW())
+                            """,
+                            user_id,
+                            old['first_name'] or '',
+                            first_name or ''
+                        )
+                    if mudou_lastname:
+                        await conn.execute(
+                            """
+                            INSERT INTO usuario_history
+                              (user_id, campo, valor_antigo, valor_novo, inserido_em)
+                            VALUES ($1::bigint, 'last_name', $2, $3, NOW())
+                            """,
+                            user_id,
+                            old['last_name'] or '',
+                            last_name or ''
+                        )
             else:
                 # LOG antes do INSERT
                 logger.info(
@@ -207,7 +245,7 @@ async def adicionar_usuario_db(
                 await conn.execute(
                     """
                     INSERT INTO usuario_history
-                    (user_id, campo, valor_antigo, valor_novo, criado_em)
+                    (user_id, campo, valor_antigo, valor_novo, inserido_em)
                     VALUES ($1::bigint, 'INSERT', NULL, 'registro criado', now())
                     """,
                     user_id
@@ -215,16 +253,28 @@ async def adicionar_usuario_db(
                 # INSERT no banco
                 await conn.execute(
                     """
-                    INSERT INTO usuarios(user_id, username, first_name, last_name)
-                    VALUES($1::bigint, $2, $3, $4)
+                    INSERT INTO usuarios
+                      (user_id, username, first_name, last_name,
+                       inserido_em, ultima_interacao, pontos)
+                    VALUES
+                      ($1,      $2,       $3,         $4,
+                       NOW(),   $5,           1)
                     """,
-                    user_id, username or '', first_name or '', last_name or ''
+                    user_id, username or '', first_name or '', last_name or '', hoje
                 )
+                await conn.execute(
+                    """
+                    INSERT INTO historico_pontos (user_id, pontos, motivo)
+                    VALUES ($1, 1, 'ponto diário por cadastro')
+                    """,
+                    user_id
+                )
+
                 # histórico: registrar cada campo separadamente
                 await conn.execute(
                     """
                     INSERT INTO usuario_history
-                      (user_id, campo, valor_antigo, valor_novo, criado_em)
+                      (user_id, campo, valor_antigo, valor_novo, inserido_em)
                     VALUES ($1::bigint, 'username', NULL, $2, now())
                     """,
                     user_id, username or ''
@@ -232,7 +282,7 @@ async def adicionar_usuario_db(
                 await conn.execute(
                     """
                     INSERT INTO usuario_history
-                      (user_id, campo, valor_antigo, valor_novo, criado_em)
+                      (user_id, campo, valor_antigo, valor_novo, inserido_em)
                     VALUES ($1::bigint, 'first_name', NULL, $2, now())
                     """,
                     user_id, first_name or ''
@@ -240,7 +290,7 @@ async def adicionar_usuario_db(
                 await conn.execute(
                     """
                     INSERT INTO usuario_history
-                      (user_id, campo, valor_antigo, valor_novo, criado_em)
+                      (user_id, campo, valor_antigo, valor_novo, inserido_em)
                     VALUES ($1::bigint, 'last_name', NULL, $2, now())
                     """,
                     user_id, last_name or ''
@@ -331,9 +381,12 @@ async def atualizar_pontos(
         return None
 
     # Calcula novos pontos e nível
-    novos = usuario['pontos'] + delta
-    ja_pontuador = usuario['is_pontuador']
-    nivel = usuario['nivel_atingido']
+    # garante que, mesmo se algo ainda vier None, a gente trate como 0
+    pontos = usuario['pontos'] if usuario['pontos'] is not None else 0
+    novos = pontos + delta
+
+    ja_pontuador = usuario['is_pontuador'] if usuario['is_pontuador'] is not None else False
+    nivel = usuario['nivel_atingido'] if usuario['nivel_atingido'] is not None else 0
 
     # Registra histórico (async)
     await registrar_historico_db(user_id, delta, motivo)
@@ -365,9 +418,11 @@ async def atualizar_pontos(
             return None
 
         # Calcula novos pontos e nível
-        novos = usuario['pontos'] + delta
-        ja_pontuador = usuario['is_pontuador']
-        nivel = usuario['nivel_atingido']
+        pontos = usuario['pontos'] if usuario['pontos'] is not None else 0
+        novos = pontos + delta
+
+        ja_pontuador = usuario['is_pontuador'] if usuario['is_pontuador'] is not None else False
+        nivel = usuario['nivel_atingido'] if usuario['nivel_atingido'] is not None else 0
 
         # Registra histórico (async)
         await registrar_historico_db(user_id, delta, motivo)
@@ -904,16 +959,24 @@ async def tratar_presenca(update, context):
 
     # 2) Busca registro completo
     reg = await obter_usuario_db(user.id)
-    hoje = hoje_sp()
 
-    # 3) Dá pontuação uma única vez por dia
-    if reg['ultimo_visto'] != hoje:
+    # 3) Dá pontuação uma única vez por dia,
+    #    extraindo só a data do último timestamp
+    ts = reg.get('ultima_interacao')  # datetime.datetime ou None
+    ultima_data = None if ts is None else ts.date() if hasattr(ts, 'date') else ts
+    if ultima_data is None or ultima_data != hoje:
+        # 3.1) Atribui o ponto
         await atualizar_pontos(user.id, 1, 'Presença diária', context.bot)
+
+        # 3.2) Registra timestamp completo de agora
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        agora = datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
         await pool.execute(
-            "UPDATE usuarios SET ultimo_visto = $1 WHERE user_id = $2::bigint",
-            hoje, user.id
+            "UPDATE usuarios SET ultima_interacao = $1 WHERE user_id = $2::bigint",
+            agora, user.id
         )
-        logger.info(f"[PRESENÇA] +1 ponto para {user.id} em {hoje}")
+        logger.info(f"[PRESENÇA] 1 ponto para {user.id} em {hoje}")
 
 
 async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
@@ -923,6 +986,7 @@ async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
         "❌ Operação cancelada. Nenhum dado foi salvo."
     )
     return ConversationHandler.END
+
 
 # No topo do módulo, defina um separador para os logs agregados:
 DELIM = '|'  # caractere que não aparece em usernames/nomes
@@ -985,19 +1049,19 @@ async def historico_usuario(update: Update, context: CallbackContext):
     # 4) Monta SQL com ordenação determinística
     if target_id is None:
         sql = (
-            "SELECT id, user_id, campo, valor_novo, criado_em"
+            "SELECT id, user_id, campo, valor_novo, inserido_em"
             " FROM usuario_history"
-            " ORDER BY criado_em DESC, id DESC"
+            " ORDER BY inserido_em DESC, id DESC"
             " LIMIT $1 OFFSET $2"
         )
         params = (PAGE_SIZE + 1, offset)
         header = f"🕒 Histórico completo (todos os usuários, página {page}):"
     else:
         sql = (
-            "SELECT id, user_id, campo, valor_novo, criado_em"
+            "SELECT id, user_id, campo, valor_novo, inserido_em"
             " FROM usuario_history"
             " WHERE user_id = $1"
-            " ORDER BY criado_em DESC, id DESC"
+            " ORDER BY inserido_em DESC, id DESC"
             " LIMIT $2 OFFSET $3"
         )
         params = (target_id, PAGE_SIZE + 1, offset)
@@ -1036,7 +1100,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
     # 7) Monta linhas (sequencial, sem agrupamento)
     lines = [escape_markdown_v2(header)]
     for r in rows:
-        ts_str = r["criado_em"].strftime("%d/%m %H:%M")
+        ts_str = r["inserido_em"].strftime("%d/%m %H:%M")
 
         # Reconstrói campos relevantes
         info = {"username": None, "first_name": None, "last_name": None}
