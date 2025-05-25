@@ -92,40 +92,41 @@ async def init_db_pool():
         await conn.execute("""
        CREATE TABLE IF NOT EXISTS usuarios (
           user_id            BIGINT PRIMARY KEY,
-          username           TEXT,
-          first_name         TEXT,
-          last_name          TEXT,
+          username           TEXT NOT NULL DEFAULT 'vazio',
+          first_name         TEXT NOT NULL DEFAULT 'vazio',
+          last_name          TEXT NOT NULL DEFAULT 'vazio',
           pontos             INTEGER NOT NULL DEFAULT 0,
           nivel_atingido     INTEGER NOT NULL DEFAULT 0,
           is_pontuador       BOOLEAN NOT NULL DEFAULT FALSE,
           ultima_interacao   DATE,                                -- só para pontuar 1x/dia
-          inserido_em          TIMESTAMP NOT NULL DEFAULT NOW(),    -- quando o usuário foi inserido
+          inserido_em        TIMESTAMP NOT NULL DEFAULT NOW(),    -- quando o usuário foi inserido
           atualizado_em      TIMESTAMP NOT NULL DEFAULT NOW()     -- quando qualquer coluna for atualizada
         );
 
-        CREATE TABLE IF NOT EXISTS historico_pontos (
+       CREATE TABLE IF NOT EXISTS historico_pontos (
             id SERIAL PRIMARY KEY,
             user_id BIGINT REFERENCES usuarios(user_id),
             pontos INTEGER NOT NULL,
-            motivo TEXT,
+            motivo TEXT NOT NULL DEFAULT 'Não Especificado',
             data TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        CREATE TABLE IF NOT EXISTS usuarios_bloqueados (
+       CREATE TABLE IF NOT EXISTS usuarios_bloqueados (
             user_id BIGINT PRIMARY KEY,
-            motivo TEXT,
+            motivo TEXT NOT NULL DEFAULT 'Não Especificado',
             data TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        CREATE TABLE IF NOT EXISTS palavras_proibidas (
+       CREATE TABLE IF NOT EXISTS palavras_proibidas (
             id SERIAL PRIMARY KEY,
             palavra TEXT UNIQUE NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS usuario_history (
+       CREATE TABLE IF NOT EXISTS usuario_history (
             id           SERIAL    PRIMARY KEY,
-            user_id      BIGINT    NOT NULL REFERENCES usuarios(user_id),
-            campo        TEXT      NOT NULL,
-            valor_antigo TEXT,
-            valor_novo   TEXT,
-            inserido_em    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            user_id      BIGINT    NOT NULL REFERENCES usuarios(user_id) ON DELETE CASCADE,
+            status       TEXT      NOT NULL,         -- 'Inserido' ou 'Atualizado'
+            username     TEXT      NOT NULL DEFAULT 'vazio',
+            first_name   TEXT      NOT NULL DEFAULT 'vazio',
+            last_name    TEXT      NOT NULL DEFAULT 'vazio',
+            inserido_em  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         """)
 
@@ -136,13 +137,12 @@ HISTORICO_USER_ID = 4
 
 async def adicionar_usuario_db(
     user_id: int,
-    username: str,
-    first_name: str,
+    username: str = "vazio",
+    first_name: str = "vazio",
     last_name: str = "vazio",
     pool_override: asyncpg.Pool | None = None,
 ):
     pg = pool_override or pool
-    # hoje é definido fora, globalmente
     async with pg.acquire() as conn:
         async with conn.transaction():
             old = await conn.fetchrow(
@@ -153,19 +153,15 @@ async def adicionar_usuario_db(
 
             if old:
                 # Verifica o que mudou
-                mudou_username = old['username'] != (username or '')
-                mudou_firstname = old['first_name'] != (first_name or '')
-                mudou_lastname = old['last_name'] != (last_name or '')
+                mudou_username = old['username'] != username
+                mudou_firstname = old['first_name'] != first_name
+                mudou_lastname = old['last_name'] != last_name
 
-                logger.info(
-                    f"[DB] Usuário {user_id} existe: atualizando de "
-                    f"({old['username']}, {old['first_name']}, {old['last_name']}) para "
-                    f"({username}, {first_name}, {last_name})"
-                )
-
-                # Só executa UPDATE e registra histórico se algo mudou
                 if mudou_username or mudou_firstname or mudou_lastname:
-                    # 1) Atualiza campos e marca timestamp de atualização
+                    logger.info(
+                        f"[DB] {user_id} Atualizado: username: {username} "
+                        f"firstname: {first_name} lastname: {last_name}"
+                    )
                     await conn.execute(
                         """
                         UPDATE usuarios
@@ -175,23 +171,27 @@ async def adicionar_usuario_db(
                                atualizado_em = NOW()
                          WHERE user_id      = $4::bigint
                         """,
-                        username or '',
-                        first_name or '',
-                        last_name or '',
-                        user_id
+                        username, first_name, last_name, user_id
                     )
 
-                    # 2) Só registra ponto diário se ainda não ganhou hoje
+                    await conn.execute(
+                        """
+                        INSERT INTO usuario_history
+                          (user_id, status, username, first_name, last_name)
+                        VALUES ($1::bigint, 'Atualizado', $2, $3, $4)
+                        """,
+                        user_id, username, first_name, last_name
+                    )
+
                     if old['ultima_interacao'] != hoje:
                         await conn.execute(
                             """
                             UPDATE usuarios
-                               SET pontos           = pontos + 1,
+                               SET pontos = pontos + 1,
                                    ultima_interacao = $1
-                             WHERE user_id         = $2::bigint
+                             WHERE user_id = $2::bigint
                             """,
-                            hoje,
-                            user_id
+                            hoje, user_id
                         )
                         await conn.execute(
                             """
@@ -201,99 +201,36 @@ async def adicionar_usuario_db(
                             """,
                             user_id
                         )
-
-                    # 3) Histórico de identidade: só para cada campo que mudou
-                    if mudou_username:
-                        await conn.execute(
-                            """
-                            INSERT INTO usuario_history
-                              (user_id, campo, valor_antigo, valor_novo, inserido_em)
-                            VALUES ($1::bigint, 'username', $2, $3, NOW())
-                            """,
-                            user_id,
-                            old['username'] or '',
-                            username or ''
-                        )
-                    if mudou_firstname:
-                        await conn.execute(
-                            """
-                            INSERT INTO usuario_history
-                              (user_id, campo, valor_antigo, valor_novo, inserido_em)
-                            VALUES ($1::bigint, 'first_name', $2, $3, NOW())
-                            """,
-                            user_id,
-                            old['first_name'] or '',
-                            first_name or ''
-                        )
-                    if mudou_lastname:
-                        await conn.execute(
-                            """
-                            INSERT INTO usuario_history
-                              (user_id, campo, valor_antigo, valor_novo, inserido_em)
-                            VALUES ($1::bigint, 'last_name', $2, $3, NOW())
-                            """,
-                            user_id,
-                            old['last_name'] or '',
-                            last_name or ''
-                        )
             else:
-                # LOG antes do INSERT
                 logger.info(
-                    f"[DB] Usuário {user_id} não existe: inserindo ({username}, {first_name}, {last_name})"
+                    f"[DB] {user_id} Inserido: username: {username} "
+                    f"firstname: {first_name} lastname: {last_name}"
                 )
-                # 1) Marca a criação no histórico
-                await conn.execute(
-                    """
-                    INSERT INTO usuario_history
-                    (user_id, campo, valor_antigo, valor_novo, inserido_em)
-                    VALUES ($1::bigint, 'INSERT', NULL, 'registro criado', now())
-                    """,
-                    user_id
-                )
-                # INSERT no banco
                 await conn.execute(
                     """
                     INSERT INTO usuarios
                       (user_id, username, first_name, last_name,
                        inserido_em, ultima_interacao, pontos)
-                    VALUES
-                      ($1,      $2,       $3,         $4,
-                       NOW(),   $5,           1)
+                    VALUES ($1, $2, $3, $4, NOW(), $5, 1)
                     """,
-                    user_id, username or '', first_name or '', last_name or '', hoje
+                    user_id, username, first_name, last_name, hoje
                 )
+
+                await conn.execute(
+                    """
+                    INSERT INTO usuario_history
+                      (user_id, status, username, first_name, last_name)
+                    VALUES ($1::bigint, 'Inserido', $2, $3, $4)
+                    """,
+                    user_id, username, first_name, last_name
+                )
+
                 await conn.execute(
                     """
                     INSERT INTO historico_pontos (user_id, pontos, motivo)
                     VALUES ($1, 1, 'ponto diário por cadastro')
                     """,
                     user_id
-                )
-
-                # histórico: registrar cada campo separadamente
-                await conn.execute(
-                    """
-                    INSERT INTO usuario_history
-                      (user_id, campo, valor_antigo, valor_novo, inserido_em)
-                    VALUES ($1::bigint, 'username', NULL, $2, now())
-                    """,
-                    user_id, username or ''
-                )
-                await conn.execute(
-                    """
-                    INSERT INTO usuario_history
-                      (user_id, campo, valor_antigo, valor_novo, inserido_em)
-                    VALUES ($1::bigint, 'first_name', NULL, $2, now())
-                    """,
-                    user_id, first_name or ''
-                )
-                await conn.execute(
-                    """
-                    INSERT INTO usuario_history
-                      (user_id, campo, valor_antigo, valor_novo, inserido_em)
-                    VALUES ($1::bigint, 'last_name', NULL, $2, now())
-                    """,
-                    user_id, last_name or ''
                 )
 
 async def obter_usuario_db(user_id: int) -> asyncpg.Record | None:
@@ -962,7 +899,7 @@ async def tratar_presenca(update, context):
 
     # 3) Dá pontuação uma única vez por dia,
     #    extraindo só a data do último timestamp
-    ts = reg.get('ultima_interacao')  # datetime.datetime ou None
+    ts = reg.get('ultima_interacao') if reg else None  # datetime.datetime ou None
     ultima_data = None if ts is None else ts.date() if hasattr(ts, 'date') else ts
     if ultima_data is None or ultima_data != hoje:
         # 3.1) Atribui o ponto
@@ -1046,10 +983,9 @@ async def historico_usuario(update: Update, context: CallbackContext):
 
     offset = (page - 1) * PAGE_SIZE
 
-    # 4) Monta SQL com ordenação determinística
     if target_id is None:
         sql = (
-            "SELECT id, user_id, campo, valor_novo, inserido_em"
+            "SELECT id, user_id, status, username, first_name, last_name, inserido_em"
             " FROM usuario_history"
             " ORDER BY inserido_em DESC, id DESC"
             " LIMIT $1 OFFSET $2"
@@ -1058,7 +994,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
         header = f"🕒 Histórico completo (todos os usuários, página {page}):"
     else:
         sql = (
-            "SELECT id, user_id, campo, valor_novo, inserido_em"
+            "SELECT id, user_id, status, username, first_name, last_name, inserido_em"
             " FROM usuario_history"
             " WHERE user_id = $1"
             " ORDER BY inserido_em DESC, id DESC"
@@ -1070,22 +1006,8 @@ async def historico_usuario(update: Update, context: CallbackContext):
             f"(página {page}, {PAGE_SIZE} por página):"
         )
 
-    # 5) Execução e slice
-    try:
-        rows = await pool.fetch(sql, *params)
-    except (asyncpg.CannotConnectNowError,
-            asyncpg.ConnectionDoesNotExistError,
-            asyncpg.PostgresError) as err:
-        logger.error(
-            "Erro ao buscar histórico %s: %s",
-            target_id or 'global', err
-        )
-        await update.message.reply_text(
-            "❌ Não foi possível acessar o histórico no momento. "
-            "Tente novamente mais tarde."
-        )
-        return
-
+    # 5) Execução e slice (igual ao seu)
+    rows = await pool.fetch(sql, *params)
     tem_mais = len(rows) > PAGE_SIZE
     rows = rows[:PAGE_SIZE]
 
@@ -1097,28 +1019,17 @@ async def historico_usuario(update: Update, context: CallbackContext):
         )
         return
 
-    # 7) Monta linhas (sequencial, sem agrupamento)
+    # 7) Monta linhas
     lines = [escape_markdown_v2(header)]
     for r in rows:
         ts_str = r["inserido_em"].strftime("%d/%m %H:%M")
-
-        # Reconstrói campos relevantes
-        info = {"username": None, "first_name": None, "last_name": None}
-        if r["campo"] in info:
-            info[r["campo"]] = r["valor_novo"] or ""
-
-        # Prefixo Inserido vs Atualizado
-        prefix = "Inserido" if r["campo"] == "INSERT" else "Atualizado"
-
-        # Parte do usuário
+        prefix = r["status"]  # 'Inserido' ou 'Atualizado'
         user_part = f"`{r['user_id']}` " if target_id is None else ""
-
-        # Linha formatada
         lines.append(
             f"{ts_str} — {user_part}*{prefix}*: "
-            f"username: `{escape_markdown_v2(info['username'] or 'vazio')}` "
-            f"firstname: `{escape_markdown_v2(info['first_name'] or 'vazio')}` "
-            f"lastname: `{escape_markdown_v2(info['last_name'] or 'vazio')}`"
+            f"username: `{escape_markdown_v2(r['username'])}` "
+            f"firstname: `{escape_markdown_v2(r['first_name'])}` "
+            f"lastname: `{escape_markdown_v2(r['last_name'])}`"
         )
 
     texto = "\n".join(lines)
