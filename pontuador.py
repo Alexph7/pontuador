@@ -312,101 +312,61 @@ async def atualizar_pontos(
     motivo: str = None,
     bot: Bot = None
 ) -> int | None:
-    # Busca usuário (async)
+    # 1) Busca o usuário
     usuario = await obter_usuario_db(user_id)
     if not usuario:
         return None
 
-    # Calcula novos pontos e nível
-    # garante que, mesmo se algo ainda vier None, a gente trate como 0
-    pontos = usuario['pontos'] if usuario['pontos'] is not None else 0
-    novos = pontos + delta
+    # 2) Calcula pontos atuais + delta
+    pontos_atuais = usuario['pontos'] or 0
+    novos = pontos_atuais + delta
 
-    ja_pontuador = usuario['is_pontuador'] if usuario['is_pontuador'] is not None else False
-    nivel = usuario['nivel_atingido'] if usuario['nivel_atingido'] is not None else 0
+    # 3) Determina status de pontuador e nível
+    ja_pontuador = usuario['is_pontuador'] or False
+    nivel = usuario['nivel_atingido'] or 0
 
-    # Registra histórico (async)
+    # 4) Registra no histórico
     await registrar_historico_db(user_id, delta, motivo)
 
-    # Verifica se virou pontuador
+    # 5) Verifica se virou pontuador pela primeira vez
     becomes_pontuador = False
     if not ja_pontuador and novos >= LIMIAR_PONTUADOR:
         ja_pontuador = True
         nivel += 1
         becomes_pontuador = True
 
-    # Verifica brinde por nível
+    # 6) Verifica brinde de nível
     brinde = None
-    for limiar, nome in NIVEIS_BRINDES.items():
-        if usuario['pontos'] < limiar <= novos:
-            brinde = nome
+    for limiar, nome_brinde in NIVEIS_BRINDES.items():
+        if pontos_atuais < limiar <= novos:
+            brinde = nome_brinde
             nivel += 1
             break
 
-    async def atualizar_pontos(
-            user_id: int,
-            delta: int,
-            motivo: str | None = None,
-            bot: Bot | None = None
-    ) -> int | None:
-        # Busca usuário (async)
-        usuario = await obter_usuario_db(user_id)
-        if not usuario:
-            return None
+    # 7) Atualiza no banco
+    await pool.execute(
+        """
+        UPDATE usuarios
+           SET pontos         = $1,
+               is_pontuador   = $2,
+               nivel_atingido = $3
+         WHERE user_id = $4::bigint
+        """,
+        novos, ja_pontuador, nivel, user_id
+    )
 
-        # Calcula novos pontos e nível
-        pontos = usuario['pontos'] if usuario['pontos'] is not None else 0
-        novos = pontos + delta
+    # 8) Notificações ao admin, se houver bot
+    if bot:
+        texto_base = f"🔔 Usuário `{user_id}` atingiu {novos} pontos"
+        if becomes_pontuador:
+            texto = texto_base + " e virou *PONTUADOR*." + (f" Motivo: {motivo}" if motivo else "")
+            asyncio.create_task(bot.send_message(chat_id=ID_ADMIN, text=texto, parse_mode='Markdown'))
+        if brinde:
+            texto = texto_base + f" e ganhou *{brinde}*." + (f" Motivo: {motivo}" if motivo else "")
+            asyncio.create_task(bot.send_message(chat_id=ID_ADMIN, text=texto, parse_mode='Markdown'))
 
-        ja_pontuador = usuario['is_pontuador'] if usuario['is_pontuador'] is not None else False
-        nivel = usuario['nivel_atingido'] if usuario['nivel_atingido'] is not None else 0
-
-        # Registra histórico (async)
-        await registrar_historico_db(user_id, delta, motivo)
-
-        # Verifica se virou pontuador
-        becomes_pontuador = False
-        if not ja_pontuador and novos >= LIMIAR_PONTUADOR:
-            ja_pontuador = True
-            nivel += 1
-            becomes_pontuador = True
-
-        # Verifica brinde por nível
-        brinde = None
-        for limiar, nome in NIVEIS_BRINDES.items():
-            if usuario['pontos'] < limiar <= novos:
-                brinde = nome
-                nivel += 1
-                break
-
-        # Atualiza dados do usuário no banco (asyncpg)
-        await pool.execute(
-            """
-            UPDATE usuarios
-               SET pontos = $1,
-                   is_pontuador = $2,
-                   nivel_atingido = $3
-             WHERE user_id = $4
-            """,
-            novos, ja_pontuador, nivel, user_id
-        )
-
-        # Envia notificações ao admin, se houver bot
-        if bot:
-            texto_base = f"🔔 Usuário `{user_id}` atingiu {novos} pontos"
-            if becomes_pontuador:
-                texto = texto_base + " e virou *PONTUADOR*." + (f" Motivo: {motivo}" if motivo else "")
-                asyncio.create_task(
-                    bot.send_message(chat_id=ID_ADMIN, text=texto, parse_mode='Markdown')
-                )
-            if brinde:
-                texto = texto_base + f" e ganhou *{brinde}*." + (f" Motivo: {motivo}" if motivo else "")
-                asyncio.create_task(
-                    bot.send_message(chat_id=ID_ADMIN, text=texto, parse_mode='Markdown')
-                )
-
-        return novos
-
+    # 9) Retorna o total atualizado
+    return novos
 
 def escape_markdown_v2(text: str) -> str:
     """
@@ -764,7 +724,7 @@ async def add_pontos_IDuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("❗️ ID inválido. Digite somente números para o user_id.")
     context.user_data["add_pt_id"] = int(text)
     await update.message.reply_text("✏️ Quantos pontos você quer dar?")
-    return ADD_PONTOS_POR_ID
+    return ADD_PONTOS_QTD
 
 async def add_pontos_quantidade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -777,7 +737,7 @@ async def add_pontos_quantidade(update: Update, context: ContextTypes.DEFAULT_TY
         return await update.message.reply_text("❗️ Valor inválido. Digite somente números para os pontos.")
     context.user_data["add_pt_value"] = int(text)
     await update.message.reply_text("📝 Por fim, qual o motivo para registrar no histórico?")
-    return ADD_PONTOS_POR_ID
+    return ADD_PONTOS_MOTIVO
 
 async def add_pontos_motivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -793,8 +753,8 @@ async def add_pontos_motivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Todos os dados coletados, processa a atualização
     alvo_id = context.user_data.pop("add_pt_id")
-    pontos  = context.user_data.pop("add_pt_valOR")
-    motivo  = context.user_data.pop("add_pt_motivo")
+    pontos  = context.user_data.pop("add_pt_value")
+    motivo  = context.user_data.pop("add_pt_reason")
 
     usuario = await obter_usuario_db(alvo_id)
     if not usuario:
@@ -815,6 +775,7 @@ async def add_pontos_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
       """
     await update.message.reply_text("❌ Operação cancelada.")
     return ConversationHandler.END
+
 
 async def adicionar_pontuador(update: Update, context: CallbackContext):
     chamador = update.effective_user.id
