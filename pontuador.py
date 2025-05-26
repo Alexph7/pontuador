@@ -76,7 +76,7 @@ else:
     BLOQUEAR_MOTIVO,
     DESBLOQUEAR_ID,
     ADD_PALAVRA_PROIBIDA,
-    DEL_PALAVRA_PROIBIDA
+    DEL_PALAVRA_PROIBIDA,
 ) = range(16)
 
 hoje = hoje_sp()
@@ -90,17 +90,19 @@ async def init_db_pool():
     async with pool.acquire() as conn:
         # Criação de tabelas se não existirem
         await conn.execute("""
-       CREATE TABLE IF NOT EXISTS usuarios (
-          user_id            BIGINT PRIMARY KEY,
-          username           TEXT NOT NULL DEFAULT 'vazio',
-          first_name         TEXT NOT NULL DEFAULT 'vazio',
-          last_name          TEXT NOT NULL DEFAULT 'vazio',
-          pontos             INTEGER NOT NULL DEFAULT 0,
-          nivel_atingido     INTEGER NOT NULL DEFAULT 0,
-          is_pontuador       BOOLEAN NOT NULL DEFAULT FALSE,
-          ultima_interacao   DATE,                                -- só para pontuar 1x/dia
-          inserido_em        TIMESTAMP NOT NULL DEFAULT NOW(),    -- quando o usuário foi inserido
-          atualizado_em      TIMESTAMP NOT NULL DEFAULT NOW()     -- quando qualquer coluna for atualizada
+        CREATE TABLE IF NOT EXISTS usuarios (
+            user_id            BIGINT PRIMARY KEY,
+            username           TEXT NOT NULL DEFAULT 'vazio',
+            first_name         TEXT NOT NULL DEFAULT 'vazio',
+            last_name          TEXT NOT NULL DEFAULT 'vazio',
+            pontos             INTEGER NOT NULL DEFAULT 0,
+            nivel_atingido     INTEGER NOT NULL DEFAULT 0,
+            is_pontuador       BOOLEAN NOT NULL DEFAULT FALSE,
+            ultima_interacao   DATE,                                -- só para pontuar 1x/dia
+            inserido_em        TIMESTAMP NOT NULL DEFAULT NOW(),    -- quando o usuário foi inserido
+            atualizado_em      TIMESTAMP NOT NULL DEFAULT NOW(),     -- quando qualquer coluna for atualizada
+            display_choice     VARCHAR(20) NOT NULL DEFAULT 'anonymous',
+            nickname           VARCHAR(50)
         );
 
        CREATE TABLE IF NOT EXISTS historico_pontos (
@@ -115,10 +117,12 @@ async def init_db_pool():
             motivo TEXT NOT NULL DEFAULT 'Não Especificado',
             data TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+        
        CREATE TABLE IF NOT EXISTS palavras_proibidas (
             id SERIAL PRIMARY KEY,
             palavra TEXT UNIQUE NOT NULL
         );
+        
        CREATE TABLE IF NOT EXISTS usuario_history (
             id           SERIAL    PRIMARY KEY,
             user_id      BIGINT    NOT NULL REFERENCES usuarios(user_id) ON DELETE CASCADE,
@@ -126,7 +130,9 @@ async def init_db_pool():
             username     TEXT      NOT NULL DEFAULT 'vazio',
             first_name   TEXT      NOT NULL DEFAULT 'vazio',
             last_name    TEXT      NOT NULL DEFAULT 'vazio',
-            inserido_em  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            inserido_em  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            display_choice  VARCHAR(20) NOT NULL DEFAULT 'anonymous',
+            nickname        VARCHAR(50)
         );
         """)
 
@@ -140,14 +146,20 @@ async def adicionar_usuario_db(
     username: str = "vazio",
     first_name: str = "vazio",
     last_name: str = "vazio",
+    display_choice: str = "anonymous",
+    nickname: str | None = None,
     pool_override: asyncpg.Pool | None = None,
 ):
     pg = pool_override or pool
     async with pg.acquire() as conn:
         async with conn.transaction():
             old = await conn.fetchrow(
-                "SELECT username, first_name, last_name, ultima_interacao "
-                "FROM usuarios WHERE user_id = $1::bigint",
+                """
+                SELECT username, first_name, last_name,
+                       display_choice, nickname, ultima_interacao
+                  FROM usuarios
+                 WHERE user_id = $1::bigint
+                """,
                 user_id
             )
 
@@ -156,11 +168,14 @@ async def adicionar_usuario_db(
                 mudou_username = old['username'] != username
                 mudou_firstname = old['first_name'] != first_name
                 mudou_lastname = old['last_name'] != last_name
+                mudou_display_choice = old['display_choice'] != display_choice
+                mudou_nickname = old['nickname'] != nickname
 
-                if mudou_username or mudou_firstname or mudou_lastname:
+                if mudou_username or mudou_firstname or mudou_lastname or mudou_display_choice or mudou_nickname:
                     logger.info(
                         f"[DB] {user_id} Atualizado: username: {username} "
-                        f"firstname: {first_name} lastname: {last_name}"
+                        f"firstname: {first_name} lastname: {last_name} "
+                        f"displaychoice: {display_choice} nickname: {nickname}"
                     )
                     await conn.execute(
                         """
@@ -168,19 +183,21 @@ async def adicionar_usuario_db(
                            SET username      = $1,
                                first_name    = $2,
                                last_name     = $3,
+                               display_choice     = $4,
+                               nickname      = $5,
                                atualizado_em = NOW()
-                         WHERE user_id      = $4::bigint
+                         WHERE user_id      = $6::bigint
                         """,
-                        username, first_name, last_name, user_id
+                        username, first_name, last_name, display_choice, nickname, user_id
                     )
 
                     await conn.execute(
                         """
                         INSERT INTO usuario_history
-                          (user_id, status, username, first_name, last_name)
-                        VALUES ($1::bigint, 'Atualizado', $2, $3, $4)
+                          (user_id, status, username, first_name, last_name, display_choice, nickname)
+                        VALUES ($1::bigint, 'Atualizado', $2, $3, $4, $5, $6)
                         """,
-                        user_id, username, first_name, last_name
+                        user_id, username, first_name, last_name, display_choice, nickname
                     )
 
                     if old['ultima_interacao'] != hoje:
@@ -204,25 +221,28 @@ async def adicionar_usuario_db(
             else:
                 logger.info(
                     f"[DB] {user_id} Inserido: username: {username} "
-                    f"firstname: {first_name} lastname: {last_name}"
+                    f"firstname: {first_name} lastname: {last_name} "
+                    f"display_choice: {display_choice} nickname: {nickname}"
                 )
                 await conn.execute(
                     """
                     INSERT INTO usuarios
                       (user_id, username, first_name, last_name,
+                       display_choice, nickname,
                        inserido_em, ultima_interacao, pontos)
-                    VALUES ($1, $2, $3, $4, NOW(), $5, 1)
+                    VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, 1)
                     """,
-                    user_id, username, first_name, last_name, hoje
+                    user_id, username, first_name, last_name,
+                    display_choice, nickname, hoje
                 )
 
                 await conn.execute(
                     """
                     INSERT INTO usuario_history
-                      (user_id, status, username, first_name, last_name)
-                    VALUES ($1::bigint, 'Inserido', $2, $3, $4)
+                      (user_id, status, username, first_name, last_name, display_choice, nickname)
+                    VALUES ($1::bigint, 'Inserido', $2, $3, $4, $5, $6)
                     """,
-                    user_id, username, first_name, last_name
+                    user_id, username, first_name, last_name, display_choice, nickname
                 )
 
                 await conn.execute(
@@ -639,24 +659,92 @@ async def cancelar_suporte(update: Update, context: CallbackContext):
     await update.message.reply_text("❌ Suporte cancelado.")
     return ConversationHandler.END
 
+ESCOLHENDO_DISPLAY, DIGITANDO_NICK = range(2)
 
 # Handler para /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
-    # dispara em background ou await, como preferir
+    # 1) Insere com display_choice='anonymous' só pra garantir que exista o registro
     asyncio.create_task(
         adicionar_usuario_db(
-            user.id,
-            user.username or "vazio",
-            user.first_name or "vazio",
-            user.last_name or "vazio"
+            user_id=user.id,
+            username=user.username or "vazio",
+            first_name=user.first_name or "vazio",
+            last_name=user.last_name or "vazio",
+            display_choice="anonymous",
+            nickname=None,
         )
     )
+
+    # 2) Pergunta como ele quer aparecer
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("1️⃣ Mostrar nome do jeito que está", callback_data="set:first_name")],
+        [InlineKeyboardButton("2️⃣ Escolher um Nick/Apelido",       callback_data="set:nickname")],
+        [InlineKeyboardButton("3️⃣ Ficar anônimo",                  callback_data="set:anonymous")],
+    ])
     await update.message.reply_text(
-        "🤖 Olá! Bem-vindo ao Bot de Pontuação da @cupomnavitrine.\n\n"
-        "Para começar abra o menu lateral ou digite um comando."
+        f"🤖 Bem-vindo, {update.effective_user.first_name}! Para começar, caso você alcance o Ranking, Como você gostaria de aparecer?",
+        reply_markup=keyboard
     )
+    return ESCOLHENDO_DISPLAY
+
+async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, escolha = query.data.split(":")
+    user = query.from_user
+
+    # 1️⃣ Se for “first_name”, grava e sai
+    if escolha == "first_name":
+        await adicionar_usuario_db(
+            user_id=user.id,
+            username=user.username or "vazio",
+            first_name=user.first_name or "vazio",
+            last_name=user.last_name or "vazio",
+            display_choice="first_name",
+            nickname=None,
+        )
+        await query.edit_message_text("👍 Ok, você aparecerá com seu nome normal.")
+        return ConversationHandler.END
+
+    # 2️⃣ Se for “nickname”, pede o nick e vai pro estado DIGITANDO_NICK
+    if escolha == "nickname":
+        await query.edit_message_text("✏️ Digite agora o nickname que você quer usar:")
+        return DIGITANDO_NICK
+
+    # 3️⃣ Se for “anonymous”, grava e sai
+    if escolha == "anonymous":
+        await adicionar_usuario_db(
+            user_id=user.id,
+            username=user.username or "vazio",
+            first_name=user.first_name or "vazio",
+            last_name=user.last_name or "vazio",
+            display_choice="anonymous",
+            nickname=None,
+        )
+        await query.edit_message_text("✅ Preferência salva: Ficar anônimo")
+        return ConversationHandler.END
+
+    # (Opcional) se vier qualquer outra callback_data
+    return ConversationHandler.END
+
+
+async def receber_nickname(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    nick = update.message.text.strip()
+
+    await adicionar_usuario_db(
+        user_id=user.id,
+        username=user.username or "vazio",
+        first_name=user.first_name or "vazio",
+        last_name=user.last_name or "vazio",
+        display_choice="nickname",
+        nickname=nick,
+    )
+    await update.message.reply_text(f"✅ Nickname salvo: **{nick}**", parse_mode="Markdown")
+    return ConversationHandler.END
+
 
 async def meus_pontos(update: Update, context: CallbackContext):
     """
@@ -671,7 +759,9 @@ async def meus_pontos(update: Update, context: CallbackContext):
             user.id,
             user.username or "vazio",
             user.first_name or "vazio",
-            user.last_name or "vazio"
+            user.last_name or "vazio",
+            display_choice="anonymous",  # valor padrão aqui
+            nickname=None  # ainda sem apelido
         )
         # Tenta buscar os dados de pontos e nível
         u = await obter_usuario_db(user.id)
@@ -853,8 +943,7 @@ async def tratar_presenca(update, context):
     user = update.effective_user
 
     # 1) Garante que exista sem logar toda vez
-    await adicionar_usuario_db(user.id, user.username or "vazio", user.first_name or "vazio", user.last_name  or "vazio")
-
+    await adicionar_usuario_db(user_id=user.id, username=user.username or "vazio", first_name=user.first_name or "vazio", last_name=user.last_name or "vazio", display_choice="anonymous",  nickname=None )
     # 2) Busca registro completo
     reg = await obter_usuario_db(user.id)
 
@@ -1210,6 +1299,7 @@ async def on_startup(app):
 
 main_conv = ConversationHandler(
     entry_points=[
+        CommandHandler("start", start, filters=filters.ChatType.PRIVATE),
         CommandHandler("admin", admin),
         CommandHandler("add_pontos", add_pontos),
         # CommandHandler("del_pontos", del_pontos),
@@ -1227,7 +1317,13 @@ main_conv = ConversationHandler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, tratar_senha),
             MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
         ],
-
+        ESCOLHENDO_DISPLAY: [
+            CallbackQueryHandler(tratar_display_choice, pattern=r"^set:"),
+        ],
+        DIGITANDO_NICK: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nickname),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        ],
         # /add_pontos → id, qtd, motivo
         ADD_PONTOS_POR_ID: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, add_pontos_IDuser),
@@ -1322,6 +1418,7 @@ async def main():
     app.add_handler(CommandHandler('admin', admin, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('meus_pontos', meus_pontos))
     app.add_handler(CommandHandler('como_ganhar', como_ganhar))
+    app.add_handler(CallbackQueryHandler(callback_historico, pattern=r"^hist:\d+:\d+$"))
     app.add_handler(CommandHandler('historico', historico))
     app.add_handler(CommandHandler('ranking_top10', ranking_top10))
     # app.add_handler(CommandHandler('ranking_top10q', ranking_top10q))
@@ -1334,6 +1431,7 @@ async def main():
     app.add_handler(
         CommandHandler("total_usuarios", total_usuarios)
     )
+
     # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
