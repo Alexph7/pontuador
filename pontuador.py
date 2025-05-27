@@ -722,7 +722,7 @@ async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TY
             display_choice="first_name",
             nickname=None,
         )
-        await query.edit_message_text("👍 Ok, você aparecerá com seu nome normal.")
+        await query.edit_message_text("👍 Ok, você aparecerá com seu nome normal, para prosseguir escolha uma opção no menú ao lado.")
         return ConversationHandler.END
 
     # 2️⃣ Se for “nickname”, pede o nick e vai pro estado DIGITANDO_NICK
@@ -740,7 +740,7 @@ async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TY
             display_choice="anonymous",
             nickname=None,
         )
-        await query.edit_message_text("✅ Preferência salva: Ficar anônimo")
+        await query.edit_message_text("✅ Preferência salva: Ficar anônimo, ahora para prosseguir escolha uma opção no menu ao lado")
         return ConversationHandler.END
 
     # (Opcional) se vier qualquer outra callback_data
@@ -759,7 +759,7 @@ async def receber_nickname(update: Update, context: ContextTypes.DEFAULT_TYPE):
         display_choice="nickname",
         nickname=nick,
     )
-    await update.message.reply_text(f"✅ Nickname salvo: **{nick}**", parse_mode="Markdown")
+    await update.message.reply_text(f"✅ Nickname salvo: '' **{nick}** '', agora para prosseguir escolha uma opção no meu ao lado", parse_mode="Markdown")
     return ConversationHandler.END
 
 
