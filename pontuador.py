@@ -257,14 +257,16 @@ async def adicionar_usuario_db(
                 )
 
 
-async def obter_usuario_db(user_id: int) -> asyncpg.Record | None:
-    """
-    Retorna um registro de usuário como asyncpg.Record ou None.
-    """
-    return await pool.fetchrow(
-        "SELECT * FROM usuarios WHERE user_id = $1",
-        user_id
-    )
+async def obter_ou_criar_usuario_db(user_id: int, username: str, first_name: str, last_name: str):
+    perfil = await pool.fetchrow("SELECT * FROM usuarios WHERE user_id = $1", user_id)
+    if perfil is None:
+        await pool.execute(
+            "INSERT INTO usuarios (user_id, username, first_name, last_name, display_choice, nickname) "
+            "VALUES ($1, $2, $3, $4, $5, $6)",
+            user_id, username or "vazio", first_name or "vazio", last_name or "vazio", "anonymous", None
+        )
+        perfil = await pool.fetchrow("SELECT * FROM usuarios WHERE user_id = $1", user_id)
+    return perfil
 
 
 async def registrar_historico_db(user_id: int, pontos: int, motivo: str | None = None):
@@ -340,7 +342,7 @@ async def atualizar_pontos(
         bot: Bot = None
 ) -> int | None:
     # 1) Busca o usuário
-    usuario = await obter_usuario_db(user_id)
+    usuario = await obter_ou_criar_usuario_db(user_id)
     if not usuario:
         return None
 
@@ -685,17 +687,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     # 1) Verifica se já existe registro; só insere uma vez
-    perfil = await obter_usuario_db(user.id)
-    if perfil is None:
-        # insere usuário inicial com anonymous
-        await adicionar_usuario_db(
-            user_id=user.id,
-            username=user.username or "vazio",
-            first_name=user.first_name or "vazio",
-            last_name=user.last_name or "vazio",
-            display_choice="anonymous",
-            nickname=None,
-        )
+    await obter_ou_criar_usuario_db(
+        user_id=user.id,
+        username=user.username or "vazio",
+        first_name=user.first_name or "vazio",
+        last_name=user.last_name or "vazio"
+    )
 
     # 2) Pergunta como ele quer aparecer
     keyboard = InlineKeyboardMarkup([
@@ -776,31 +773,21 @@ async def meus_pontos(update: Update, context: CallbackContext):
     user = update.effective_user
 
     try:
-        # Tenta inserir ou atualizar o usuário
-        # 1) Verifica se já existe registro; só insere uma vez
-        perfil = await obter_usuario_db(user.id)
-        if perfil is None:
-            # insere usuário inicial com anonymous
-            await adicionar_usuario_db(
-                user_id=user.id,
-                username=user.username or "vazio",
-                first_name=user.first_name or "vazio",
-                last_name=user.last_name or "vazio",
-                display_choice="anonymous",
-                nickname=None,
-            )
-        # Tenta buscar os dados de pontos e nível
-        u = await obter_usuario_db(user.id)
-    except Exception as e:
-        # Aqui você pode usar logger.error(e) para registrar a stack
-        await update.message.reply_text(
-            "❌ Desculpe, tivemos um problema ao acessar as suas informações. Tente novamente mais tarde. se o problema persistir contate o suporte."
+        perfil = await obter_ou_criar_usuario_db(
+            user_id=user.id,
+            username=user.username or "vazio",
+            first_name=user.first_name or "vazio",
+            last_name=user.last_name or "vazio",
         )
-        return
-    # Se tudo ocorreu bem, respondemos normalmente
-    await update.message.reply_text(
-        f"🎉 Você tem {u['pontos']} pontos (Nível {u['nivel_atingido']})."
-    )
+        await update.message.reply_text(
+            f"🎉 Você tem {perfil['pontos']} pontos (Nível {perfil['nivel_atingido']})."
+        )
+    except Exception as e:
+        logger.error(f"Erro ao buscar pontos do usuário {user.id}: {e}", exc_info=True)
+        await update.message.reply_text(
+            "❌ Desculpe, tivemos um problema ao acessar as suas informações. "
+            "Tente novamente mais tarde. Se o problema persistir contate o suporte."
+        )
 
 
 async def como_ganhar(update: Update, context: CallbackContext):
@@ -875,7 +862,7 @@ async def add_pontos_motivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pontos = context.user_data.pop("add_pt_value")
     motivo = context.user_data.pop("add_pt_reason")
 
-    usuario = await obter_usuario_db(alvo_id)
+    usuario = await obter_ou_criar_usuario_db(alvo_id)
     if not usuario:
         return await update.message.reply_text("❌ Usuário não encontrado. Cancelando operação.")
 
@@ -899,7 +886,7 @@ async def add_pontos_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def adicionar_pontuador(update: Update, context: CallbackContext):
     chamador = update.effective_user.id
-    reg = await obter_usuario_db(chamador)
+    reg = await obter_ou_criar_usuario_db(chamador)
     if chamador != ID_ADMIN and not reg['is_pontuador']:
         return await update.message.reply_text("🔒 Sem permissão.")
 
@@ -977,7 +964,7 @@ async def tratar_presenca(update, context):
                                first_name=user.first_name or "vazio", last_name=user.last_name or "vazio",
                                display_choice="anonymous", nickname=None)
     # 2) Busca registro completo
-    reg = await obter_usuario_db(user.id)
+    reg = await obter_ou_criar_usuario_db(user.id)
 
     # 3) Dá pontuação uma única vez por dia,
     #    extraindo só a data do último timestamp
