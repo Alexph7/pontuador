@@ -740,7 +740,7 @@ async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TY
             display_choice="anonymous",
             nickname=None,
         )
-        await query.edit_message_text("✅ Preferência salva: Ficar anônimo, ahora para prosseguir escolha uma opção no menu ao lado")
+        await query.edit_message_text("✅ Preferência salva: Ficar anônimo, agora para prosseguir escolha uma opção no menu ao lado")
         return ConversationHandler.END
 
     # (Opcional) se vier qualquer outra callback_data
