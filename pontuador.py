@@ -777,14 +777,18 @@ async def meus_pontos(update: Update, context: CallbackContext):
 
     try:
         # Tenta inserir ou atualizar o usuário
-        await adicionar_usuario_db(
-            user.id,
-            user.username or "vazio",
-            user.first_name or "vazio",
-            user.last_name or "vazio",
-            display_choice="anonymous",  # valor padrão aqui
-            nickname=None  # ainda sem apelido
-        )
+        # 1) Verifica se já existe registro; só insere uma vez
+        perfil = await obter_usuario_db(user.id)
+        if perfil is None:
+            # insere usuário inicial com anonymous
+            await adicionar_usuario_db(
+                user_id=user.id,
+                username=user.username or "vazio",
+                first_name=user.first_name or "vazio",
+                last_name=user.last_name or "vazio",
+                display_choice="anonymous",
+                nickname=None,
+            )
         # Tenta buscar os dados de pontos e nível
         u = await obter_usuario_db(user.id)
     except Exception as e:
