@@ -1110,7 +1110,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
             f"firstname: `{escape_markdown_v2(r['first_name'])}` "
             f"lastname: `{escape_markdown_v2(r['last_name'])}` "
             f"display_choice: `{escape_markdown_v2(str(r['display_choice']))}` "
-            f"nickname: `{escape_markdown_v2(r['nickname'])}`"
+            f"nickname: `{escape_markdown_v2(r['nickname'])}` \n"
         )
 
     texto = "\n".join(lines)
