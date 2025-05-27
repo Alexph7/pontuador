@@ -139,7 +139,7 @@ async def init_db_pool():
 
 
 # --- Helpers de usuário (asyncpg) ---
-PAGE_SIZE = 30
+PAGE_SIZE = 22
 MAX_MESSAGE_LENGTH = 4000
 HISTORICO_USER_ID = 4
 
@@ -399,9 +399,12 @@ async def atualizar_pontos(
 def escape_markdown_v2(text: str) -> str:
     """
     Escapa caracteres reservados do MarkdownV2.
+    Se receber None, retorna um traço '—'.
     """
+    if text is None:
+        return "—"
     escape_chars = r'_*[]()~`>#+-=|{}.!'
-    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
+    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', str(text))
 
 
 # Mensagem de Mural de Entrada
@@ -1061,7 +1064,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
 
     if target_id is None:
         sql = (
-            "SELECT id, user_id, status, username, first_name, last_name, inserido_em"
+            "SELECT id, user_id, status, username, first_name, last_name, display_choice, nickname, inserido_em"
             " FROM usuario_history"
             " ORDER BY inserido_em DESC, id DESC"
             " LIMIT $1 OFFSET $2"
@@ -1070,7 +1073,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
         header = f"🕒 Histórico completo (todos os usuários, página {page}):"
     else:
         sql = (
-            "SELECT id, user_id, status, username, first_name, last_name, inserido_em"
+            "SELECT id, user_id, status, username, first_name, last_name, display_choice, nickname, inserido_em"
             " FROM usuario_history"
             " WHERE user_id = $1"
             " ORDER BY inserido_em DESC, id DESC"
@@ -1105,7 +1108,9 @@ async def historico_usuario(update: Update, context: CallbackContext):
             f"{ts_str} — {user_part}*{prefix}*: "
             f"username: `{escape_markdown_v2(r['username'])}` "
             f"firstname: `{escape_markdown_v2(r['first_name'])}` "
-            f"lastname: `{escape_markdown_v2(r['last_name'])}`"
+            f"lastname: `{escape_markdown_v2(r['last_name'])}` "
+            f"display_choice: `{escape_markdown_v2(str(r['display_choice']))}` "
+            f"nickname: `{escape_markdown_v2(r['nickname'])}`"
         )
 
     texto = "\n".join(lines)
