@@ -681,9 +681,11 @@ ESCOLHENDO_DISPLAY, DIGITANDO_NICK = range(2)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
-    # 1) Insere com display_choice='anonymous' só pra garantir que exista o registro
-    asyncio.create_task(
-        adicionar_usuario_db(
+    # 1) Verifica se já existe registro; só insere uma vez
+    perfil = await obter_usuario_db(user.id)
+    if perfil is None:
+        # insere usuário inicial com anonymous
+        await adicionar_usuario_db(
             user_id=user.id,
             username=user.username or "vazio",
             first_name=user.first_name or "vazio",
@@ -691,19 +693,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             display_choice="anonymous",
             nickname=None,
         )
-    )
 
     # 2) Pergunta como ele quer aparecer
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("1️⃣ Mostrar nome do jeito que está", callback_data="set:first_name")],
-        [InlineKeyboardButton("2️⃣ Escolher um Nick/Apelido", callback_data="set:nickname")],
-        [InlineKeyboardButton("3️⃣ Ficar anônimo", callback_data="set:anonymous")],
+        [InlineKeyboardButton("2️⃣ Escolher um Nick/Apelido",       callback_data="set:nickname")],
+        [InlineKeyboardButton("3️⃣ Ficar anônimo",                  callback_data="set:anonymous")],
     ])
     await update.message.reply_text(
-        f"🤖 Bem-vindo, {update.effective_user.first_name}! Para começar, caso você alcance o Ranking, Como você gostaria de aparecer?",
+        f"🤖 Bem-vindo, {user.first_name}! Para começar, caso você alcance o Ranking, como você gostaria de aparecer?",
         reply_markup=keyboard
     )
     return ESCOLHENDO_DISPLAY
+
 
 
 async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
