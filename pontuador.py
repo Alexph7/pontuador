@@ -31,6 +31,7 @@ from telegram.ext import (
 def hoje_sp():
     return datetime.now(tz=ZoneInfo("America/Sao_Paulo")).date()
 
+
 pool: asyncpg.Pool | None = None
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -76,17 +77,17 @@ else:
     BLOQUEAR_MOTIVO,
     DESBLOQUEAR_ID,
     ADD_PALAVRA_PROIBIDA,
-    DEL_PALAVRA_PROIBIDA,
+    DEL_PALAVRA_PROIBIDA
 ) = range(16)
 
 hoje = hoje_sp()
 
-TEMPO_LIMITE_BUSCA = 10          # Tempo máximo (em segundos) para consulta
+TEMPO_LIMITE_BUSCA = 10  # Tempo máximo (em segundos) para consulta
 
 
 async def init_db_pool():
     global pool
-    pool = await asyncpg.create_pool(dsn=DATABASE_URL,min_size=1,max_size=10)
+    pool = await asyncpg.create_pool(dsn=DATABASE_URL, min_size=1, max_size=10)
     async with pool.acquire() as conn:
         # Criação de tabelas se não existirem
         await conn.execute("""
@@ -117,12 +118,12 @@ async def init_db_pool():
             motivo TEXT NOT NULL DEFAULT 'Não Especificado',
             data TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        
+
        CREATE TABLE IF NOT EXISTS palavras_proibidas (
             id SERIAL PRIMARY KEY,
             palavra TEXT UNIQUE NOT NULL
         );
-        
+
        CREATE TABLE IF NOT EXISTS usuario_history (
             id           SERIAL    PRIMARY KEY,
             user_id      BIGINT    NOT NULL REFERENCES usuarios(user_id) ON DELETE CASCADE,
@@ -136,19 +137,21 @@ async def init_db_pool():
         );
         """)
 
+
 # --- Helpers de usuário (asyncpg) ---
 PAGE_SIZE = 30
 MAX_MESSAGE_LENGTH = 4000
 HISTORICO_USER_ID = 4
 
+
 async def adicionar_usuario_db(
-    user_id: int,
-    username: str = "vazio",
-    first_name: str = "vazio",
-    last_name: str = "vazio",
-    display_choice: str = "anonymous",
-    nickname: str | None = None,
-    pool_override: asyncpg.Pool | None = None,
+        user_id: int,
+        username: str = "vazio",
+        first_name: str = "vazio",
+        last_name: str = "vazio",
+        display_choice: str = "anonymous",
+        nickname: str | None = None,
+        pool_override: asyncpg.Pool | None = None,
 ):
     pg = pool_override or pool
     async with pg.acquire() as conn:
@@ -253,6 +256,7 @@ async def adicionar_usuario_db(
                     user_id
                 )
 
+
 async def obter_usuario_db(user_id: int) -> asyncpg.Record | None:
     """
     Retorna um registro de usuário como asyncpg.Record ou None.
@@ -261,6 +265,7 @@ async def obter_usuario_db(user_id: int) -> asyncpg.Record | None:
         "SELECT * FROM usuarios WHERE user_id = $1",
         user_id
     )
+
 
 async def registrar_historico_db(user_id: int, pontos: int, motivo: str | None = None):
     """
@@ -273,6 +278,7 @@ async def registrar_historico_db(user_id: int, pontos: int, motivo: str | None =
         """,
         user_id, pontos, motivo
     )
+
 
 async def bloquear_user_bd(user_id: int, motivo: str | None = None):
     """
@@ -291,6 +297,7 @@ async def bloquear_user_bd(user_id: int, motivo: str | None = None):
         user_id,
         motivo
     )
+
 
 async def total_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -327,10 +334,10 @@ async def total_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def atualizar_pontos(
-    user_id: int,
-    delta: int,
-    motivo: str = None,
-    bot: Bot = None
+        user_id: int,
+        delta: int,
+        motivo: str = None,
+        bot: Bot = None
 ) -> int | None:
     # 1) Busca o usuário
     usuario = await obter_usuario_db(user_id)
@@ -388,12 +395,14 @@ async def atualizar_pontos(
     # 9) Retorna o total atualizado
     return novos
 
+
 def escape_markdown_v2(text: str) -> str:
     """
     Escapa caracteres reservados do MarkdownV2.
     """
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
+
 
 # Mensagem de Mural de Entrada
 async def setup_bot_description(app):
@@ -480,10 +489,12 @@ async def tratar_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Senha incorreta. Acesso negado.")
     return ConversationHandler.END
 
+
 # --- Helpers de bloqueio com asyncpg ---
 async def bloquear_start(update: Update, context: CallbackContext):
     await update.message.reply_text("👤 Envie o ID do usuário que deseja bloquear.")
     return BLOQUEAR_ID
+
 
 async def bloquear_usuario_id(update: Update, context: CallbackContext):
     try:
@@ -492,6 +503,7 @@ async def bloquear_usuario_id(update: Update, context: CallbackContext):
         return BLOQUEAR_MOTIVO
     except ValueError:
         return await update.message.reply_text("❌ ID inválido. Tente novamente.")
+
 
 async def bloquear_usuario_motivo(update: Update, context: CallbackContext):
     motivo = update.message.text
@@ -506,6 +518,7 @@ async def desbloquear_user_bd(user_id: int):
         "DELETE FROM usuarios_bloqueados WHERE user_id = $1",
         user_id
     )
+
 
 async def obter_bloqueado(user_id: int):
     return await pool.fetchrow(
@@ -559,7 +572,7 @@ async def listar_palavras_proibidas_db() -> list[str]:
 # --- Middleware de verificação de bloqueio ---
 async def checar_bloqueio(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
-    reg = await obter_bloqueado(user_id)   # agora await
+    reg = await obter_bloqueado(user_id)  # agora await
     if reg:
         motivo = reg['motivo'] or 'sem motivo especificado'
         await update.message.reply_text(f"⛔ Você está bloqueado. Motivo: {motivo}")
@@ -575,7 +588,7 @@ async def bloquear_usuario(update: Update, context: CallbackContext):
     except:
         return await update.message.reply_text("Uso: /bloquear <user_id> [motivo]")
     motivo = ' '.join(context.args[1:]) or None
-    await bloquear_user_bd(alvo, motivo)   # await aqui
+    await bloquear_user_bd(alvo, motivo)  # await aqui
     await update.message.reply_text(f"✅ Usuário {alvo} bloqueado. Motivo: {motivo or 'nenhum'}")
 
 
@@ -586,7 +599,7 @@ async def desbloquear_usuario(update: Update, context: CallbackContext):
         alvo = int(context.args[0])
     except:
         return await update.message.reply_text("Uso: /desbloquear <user_id>")
-    await desbloquear_user_bd(alvo)          # await aqui
+    await desbloquear_user_bd(alvo)  # await aqui
     await update.message.reply_text(f"✅ Usuário {alvo} desbloqueado.")
 
 
@@ -627,7 +640,8 @@ async def listar_palavras_proibidas(update: Update, context: CallbackContext):
 # --- Handler de suporte ---
 
 async def suporte(update: Update, context: CallbackContext):
-    await update.message.reply_text("📝 Escreva sua mensagem de suporte (máx. 500 caracteres). Use /cancelar para abortar.")
+    await update.message.reply_text(
+        "📝 Escreva sua mensagem de suporte (máx. 500 caracteres). Use /cancelar para abortar.")
     return ESPERANDO_SUPORTE
 
 
@@ -659,7 +673,9 @@ async def cancelar_suporte(update: Update, context: CallbackContext):
     await update.message.reply_text("❌ Suporte cancelado.")
     return ConversationHandler.END
 
+
 ESCOLHENDO_DISPLAY, DIGITANDO_NICK = range(2)
+
 
 # Handler para /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -680,14 +696,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2) Pergunta como ele quer aparecer
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("1️⃣ Mostrar nome do jeito que está", callback_data="set:first_name")],
-        [InlineKeyboardButton("2️⃣ Escolher um Nick/Apelido",       callback_data="set:nickname")],
-        [InlineKeyboardButton("3️⃣ Ficar anônimo",                  callback_data="set:anonymous")],
+        [InlineKeyboardButton("2️⃣ Escolher um Nick/Apelido", callback_data="set:nickname")],
+        [InlineKeyboardButton("3️⃣ Ficar anônimo", callback_data="set:anonymous")],
     ])
     await update.message.reply_text(
         f"🤖 Bem-vindo, {update.effective_user.first_name}! Para começar, caso você alcance o Ranking, Como você gostaria de aparecer?",
         reply_markup=keyboard
     )
     return ESCOLHENDO_DISPLAY
+
 
 async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -803,6 +820,7 @@ async def add_pontos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📋 Atribuir pontos: primeiro, qual é o user_id?")
     return ADD_PONTOS_POR_ID
 
+
 async def add_pontos_IDuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
         Recebe o ID do usuário destinatário.
@@ -816,6 +834,7 @@ async def add_pontos_IDuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✏️ Quantos pontos você quer dar?")
     return ADD_PONTOS_QTD
 
+
 async def add_pontos_quantidade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
         Recebe a quantidade de pontos a ser atribuída.
@@ -828,6 +847,7 @@ async def add_pontos_quantidade(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data["add_pt_value"] = int(text)
     await update.message.reply_text("📝 Por fim, qual o motivo para registrar no histórico?")
     return ADD_PONTOS_MOTIVO
+
 
 async def add_pontos_motivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -843,8 +863,8 @@ async def add_pontos_motivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Todos os dados coletados, processa a atualização
     alvo_id = context.user_data.pop("add_pt_id")
-    pontos  = context.user_data.pop("add_pt_value")
-    motivo  = context.user_data.pop("add_pt_reason")
+    pontos = context.user_data.pop("add_pt_value")
+    motivo = context.user_data.pop("add_pt_reason")
 
     usuario = await obter_usuario_db(alvo_id)
     if not usuario:
@@ -857,6 +877,7 @@ async def add_pontos_motivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Total agora: {novo_total} pts."
     )
     return ConversationHandler.END
+
 
 async def add_pontos_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -943,7 +964,9 @@ async def tratar_presenca(update, context):
     user = update.effective_user
 
     # 1) Garante que exista sem logar toda vez
-    await adicionar_usuario_db(user_id=user.id, username=user.username or "vazio", first_name=user.first_name or "vazio", last_name=user.last_name or "vazio", display_choice="anonymous",  nickname=None )
+    await adicionar_usuario_db(user_id=user.id, username=user.username or "vazio",
+                               first_name=user.first_name or "vazio", last_name=user.last_name or "vazio",
+                               display_choice="anonymous", nickname=None)
     # 2) Busca registro completo
     reg = await obter_usuario_db(user.id)
 
@@ -977,6 +1000,7 @@ async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
 
 # No topo do módulo, defina um separador para os logs agregados:
 DELIM = '|'  # caractere que não aparece em usernames/nomes
+
 
 async def historico_usuario(update: Update, context: CallbackContext):
     # 0) Autenticação de admin
@@ -1092,14 +1116,14 @@ async def historico_usuario(update: Update, context: CallbackContext):
         botoes.append(
             InlineKeyboardButton(
                 "◀️ Anterior",
-                callback_data=f"hist:{target_id or 0}:{page-1}"
+                callback_data=f"hist:{target_id or 0}:{page - 1}"
             )
         )
     if tem_mais:
         botoes.append(
             InlineKeyboardButton(
                 "Próximo ▶️",
-                callback_data=f"hist:{target_id or 0}:{page+1}"
+                callback_data=f"hist:{target_id or 0}:{page + 1}"
             )
         )
     markup = InlineKeyboardMarkup([botoes]) if botoes else None
@@ -1118,6 +1142,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
         target_id or 'global',
         page
     )
+
 
 async def callback_historico(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -1139,6 +1164,7 @@ async def callback_historico(update: Update, context: CallbackContext):
             self.effective_user = user
             self.message = message
             self.callback_query = callback_query
+
     # Verifica autenticação (usando o mesmo mét odo da função principal)
     requester_id = query.from_user.id
     if not context.user_data.get("is_admin"):
@@ -1234,9 +1260,9 @@ async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Inline keyboard para navegar páginas
     buttons = []
     if page > 1:
-        buttons.append(InlineKeyboardButton('◀️ Anterior', callback_data=f"usuarios|{page-1}|{' '.join(args)}"))
+        buttons.append(InlineKeyboardButton('◀️ Anterior', callback_data=f"usuarios|{page - 1}|{' '.join(args)}"))
     if page < total_pages:
-        buttons.append(InlineKeyboardButton('Próxima ▶️', callback_data=f"usuarios|{page+1}|{' '.join(args)}"))
+        buttons.append(InlineKeyboardButton('Próxima ▶️', callback_data=f"usuarios|{page + 1}|{' '.join(args)}"))
     keyboard = InlineKeyboardMarkup([buttons]) if buttons else None
 
     await update.message.reply_text(text, parse_mode='MarkdownV2', reply_markup=keyboard)
@@ -1299,8 +1325,7 @@ async def on_startup(app):
 
 main_conv = ConversationHandler(
     entry_points=[
-        CommandHandler("start", start, filters=filters.ChatType.PRIVATE),
-        CommandHandler("admin", admin),
+        CommandHandler("admin", admin, filters=filters.ChatType.PRIVATE),
         CommandHandler("add_pontos", add_pontos),
         # CommandHandler("del_pontos", del_pontos),
         # CommandHandler("add_admin", add_admin),
@@ -1315,13 +1340,6 @@ main_conv = ConversationHandler(
         # /admin → senha
         ADMIN_SENHA: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, tratar_senha),
-            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
-        ],
-        ESCOLHENDO_DISPLAY: [
-            CallbackQueryHandler(tratar_display_choice, pattern=r"^set:"),
-        ],
-        DIGITANDO_NICK: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nickname),
             MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
         ],
         # /add_pontos → id, qtd, motivo
@@ -1399,9 +1417,9 @@ main_conv = ConversationHandler(
     allow_reentry=True,
 )
 
+
 # --- Inicialização do bot ---
 async def main():
-
     # 1) inicializa o pool ANTES de criar o Application
     await init_db_pool()
     # 2) agora monte o bot
@@ -1414,7 +1432,24 @@ async def main():
     )
     app.add_handler(main_conv)
 
-    app.add_handler(CommandHandler('start', start, filters=filters.ChatType.PRIVATE))
+    app.add_handler(
+        ConversationHandler(
+            entry_points = [CommandHandler("start", start, filters=filters.ChatType.PRIVATE)],
+            states = {
+                ESCOLHENDO_DISPLAY: [
+                    CallbackQueryHandler(tratar_display_choice, pattern=r"^set:")
+                ],
+                DIGITANDO_NICK: [
+                   MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nickname),
+                  MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar)
+                ],
+            },
+            fallbacks = [CommandHandler("cancelar", cancelar)],
+            allow_reentry = True,
+        )
+    )
+
+
     app.add_handler(CommandHandler('admin', admin, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('meus_pontos', meus_pontos))
     app.add_handler(CommandHandler('como_ganhar', como_ganhar))
@@ -1439,6 +1474,7 @@ async def main():
 
     logger.info("🔄 Iniciando polling...")
     await app.run_polling()
+
 
 if __name__ == "__main__":
 
