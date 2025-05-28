@@ -943,17 +943,42 @@ async def historico(update: Update, context: CallbackContext):
 
 
 async def ranking_top10(update: Update, context: CallbackContext):
+    # 1) Busca também display_choice, nickname e first_name
     top = await pool.fetch(
-        "SELECT username, pontos FROM usuarios ORDER BY pontos DESC LIMIT 10"
+        """
+        SELECT
+            user_id,
+            username,
+            first_name,
+            display_choice,
+            nickname,
+            pontos
+        FROM usuarios
+        ORDER BY pontos DESC
+        LIMIT 10
+        """
     )
     if not top:
         await update.message.reply_text("🏅 Nenhum usuário cadastrado.")
         return
-    text = "🏅 Top 10 de pontos:\n" + "\n".join(
-        f"{i + 1}. {(u['username'] or 'Usuário')} – {u['pontos']} pts"
-        for i, u in enumerate(top)
-    )
-    await update.message.reply_text(text)
+
+    # 2) Monta o texto com base na escolha de display de cada um
+    linhas = ["🏅 Top 10 de pontos:"]
+    for i, u in enumerate(top):
+        choice = u["display_choice"]
+        if choice == "first_name":
+            display = u["first_name"] or u["username"] or "Usuário"
+        elif choice in ("nickname", "anonymous"):
+            # tanto o apelido digitado quanto o anônimo já estão em nickname
+            display = u["nickname"] or u["username"] or "Usuário"
+        else:
+            # fallback: usa username ou first_name
+            display = u["username"] or u["first_name"] or "Usuário"
+
+        linhas.append(f"{i + 1}. {display} – {u['pontos']} pts")
+
+    texto = "\n".join(linhas)
+    await update.message.reply_text(texto)
 
 
 async def pontuador(update: Update, context: CallbackContext):
