@@ -1386,7 +1386,7 @@ main_conv = ConversationHandler(
         CommandHandler("admin", admin, filters=filters.ChatType.PRIVATE),
         CommandHandler("add_pontos", add_pontos),
         # CommandHandler("del_pontos", del_pontos),
-        CommandHandler("add_admin", add_admin),
+        #CommandHandler("add_admin", add_admin),
         # CommandHandler("rem_admin", rem_admin),
         # CommandHandler("rem_pontuador", rem_pontuador),
         # CommandHandler("bloquear", bloquear),
