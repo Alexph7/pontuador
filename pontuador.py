@@ -61,25 +61,11 @@ if ADMIN_IDS:
 else:
     ADMINS = []
 
-# Estados de conversa
-(
-    ADMIN_SENHA,
-    ESPERANDO_SUPORTE,
-    ADD_PONTOS_POR_ID,
-    ADD_PONTOS_QTD,
-    ADD_PONTOS_MOTIVO,
-    DEL_PONTOS_ID,
-    DEL_PONTOS_QTD,
-    DEL_PONTOS_MOTIVO,
-    ADD_ADMIN_ID,
-    REM_ADMIN_ID,
-    REMOVER_PONTUADOR_ID,
-    BLOQUEAR_ID,
-    BLOQUEAR_MOTIVO,
-    DESBLOQUEAR_ID,
-    ADD_PALAVRA_PROIBIDA,
-    DEL_PALAVRA_PROIBIDA
-) = range(16)
+#Estados da conversa
+(ADMIN_SENHA, ESPERANDO_SUPORTE, ADD_PONTOS_POR_ID, ADD_PONTOS_QTD, ADD_PONTOS_MOTIVO, DEL_PONTOS_ID, DEL_PONTOS_QTD,
+ DEL_PONTOS_MOTIVO, ADD_ADMIN_ID, REM_ADMIN_ID, REMOVER_PONTUADOR_ID, BLOQUEAR_ID, BLOQUEAR_MOTIVO, DESBLOQUEAR_ID,
+ ADD_PALAVRA_PROIBIDA, DEL_PALAVRA_PROIBIDA) = range(16)
+
 
 hoje = hoje_sp()
 
@@ -431,9 +417,7 @@ async def setup_commands(app):
         comandos_basicos = [
             BotCommand("meus_pontos", "Ver sua pontuação e nível"),
             BotCommand("ranking_top10", "Top 10 de usuários por pontos"),
-            BotCommand("ranking_top10q", "Top 10 dos ultimos 15 dias"),
-            BotCommand("historico", "Mostrar seu histórico de pontos"),
-            BotCommand("como_ganhar", "Como ganhar mais pontos"),
+
         ]
 
         # 1) Comandos padrão (público)
@@ -444,8 +428,11 @@ async def setup_commands(app):
 
         # 2) Comandos em chat privado (com suporte)
         comandos_privados = comandos_basicos + [
+            BotCommand("historico", "Mostrar seu histórico de pontos"),
             BotCommand("suporte", "Enviar mensagem ao suporte"),
             BotCommand("cancelar", "Cancelar mensagem ao suporte"),
+            # BotCommand("ranking_top10q", "Top 10 dos ultimos 15 dias"),
+            BotCommand("como_ganhar", "Como ganhar mais pontos"),
         ]
 
         await app.bot.set_my_commands(
@@ -811,9 +798,9 @@ async def como_ganhar(update: Update, context: CallbackContext):
         "• Compras por ID em videos.\n"
         "• Até 1 comentário diario em grupos\n"
         "• Indicar links de lives com moedas\n"
-        "• Receber pontuações de outros usuários por ajuda\n"
-        "• Receber pontuações por convites ⓘ\n"
-        "• Mais em Breve. \n\n"
+        #"• Receber pontuações de outros usuários por ajuda\n"
+        #"• Receber pontuações por convites ⓘ\n"
+        "• Mais opções em Breve. \n\n"
         "Use /meus_pontos para ver seu total!"
     )
 
