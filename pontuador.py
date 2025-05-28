@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from datetime import datetime, date
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram import Update, Bot
+from telegram.constants import ParseMode
 from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler
 from typing import Dict, Any
 from dotenv import load_dotenv
@@ -707,7 +708,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ESCOLHENDO_DISPLAY
 
 
-
 async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -732,17 +732,32 @@ async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text("✏️ Digite agora o nickname que você quer usar:")
         return DIGITANDO_NICK
 
-    # 3️⃣ Se for “anonymous”, grava e sai
+    # 3️⃣ Se for “anonymous”, gera inicial com fallback zero e salva
     if escolha == "anonymous":
+        # tenta first_name, senão username, senão '0'
+        if user.first_name and user.first_name.strip():
+            inicial = user.first_name.strip()[0]
+        elif user.username and user.username.strip():
+            inicial = user.username.strip()[0]
+        else:
+            inicial = "0"
+
+        anon = f"{inicial.upper()}****"
+
         await adicionar_usuario_db(
             user_id=user.id,
             username=user.username or "vazio",
             first_name=user.first_name or "vazio",
             last_name=user.last_name or "vazio",
             display_choice="anonymous",
-            nickname=None,
+            nickname=anon,  # salva “0*****” ou “A*****”
         )
-        await query.edit_message_text("✅ Preferência salva: Ficar anônimo, agora para prosseguir escolha uma opção no menu ao lado")
+
+        await query.edit_message_text(
+            f"✅ Você ficará anônimo como <code>{anon}</code>.\n\n"
+            "Agora escolha uma opção no menu ao lado.",
+            parse_mode=ParseMode.HTML
+        )
         return ConversationHandler.END
 
     # (Opcional) se vier qualquer outra callback_data
