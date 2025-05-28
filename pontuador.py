@@ -54,27 +54,27 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 ADMIN_IDS = os.getenv("ADMIN_IDS", "")
 if ADMIN_IDS:
     try:
-        ADMINS = [int(x.strip()) for x in ADMIN_IDS.split(',') if x.strip()]
+        ADMINS = {int(x.strip()) for x in ADMIN_IDS.split(',') if x.strip()}
     except ValueError:
         logger.error("ADMIN_IDS deve conter apenas números separados por vírgula.")
-        ADMINS = []
+        ADMINS = set()
 else:
-    ADMINS = []
+    ADMINS = set()
+
 
 #Estados da conversa
 (ADMIN_SENHA, ESPERANDO_SUPORTE, ADD_PONTOS_POR_ID, ADD_PONTOS_QTD, ADD_PONTOS_MOTIVO, DEL_PONTOS_ID, DEL_PONTOS_QTD,
  DEL_PONTOS_MOTIVO, ADD_ADMIN_ID, REM_ADMIN_ID, REMOVER_PONTUADOR_ID, BLOQUEAR_ID, BLOQUEAR_MOTIVO, DESBLOQUEAR_ID,
  ADD_PALAVRA_PROIBIDA, DEL_PALAVRA_PROIBIDA) = range(16)
 
-
 hoje = hoje_sp()
 
 TEMPO_LIMITE_BUSCA = 10  # Tempo máximo (em segundos) para consulta
 
-
 async def init_db_pool():
-    global pool
+    global pool, ADMINS
     pool = await asyncpg.create_pool(dsn=DATABASE_URL, min_size=1, max_size=10)
+    ADMINS = await carregar_admins_db()
     async with pool.acquire() as conn:
         # Criação de tabelas se não existirem
         await conn.execute("""
@@ -109,6 +109,10 @@ async def init_db_pool():
        CREATE TABLE IF NOT EXISTS palavras_proibidas (
             id SERIAL PRIMARY KEY,
             palavra TEXT UNIQUE NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS admins (
+            user_id BIGINT PRIMARY KEY
         );
 
        CREATE TABLE IF NOT EXISTS usuario_history (
@@ -475,12 +479,18 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def tratar_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text.strip() == str(ADMIN_PASSWORD):
+    user_id = update.effective_user.id
+    senha = update.message.text.strip()
+
+    if senha == str(ADMIN_PASSWORD):
+        await adicionar_admin_db(user_id)  # Adiciona no banco
+        ADMINS.add(user_id)                 # Adiciona na memória
         context.user_data["is_admin"] = True
         await update.message.reply_text(ADMIN_MENU)
+        return ConversationHandler.END
     else:
-        await update.message.reply_text("❌ Senha incorreta. Acesso negado.")
-    return ConversationHandler.END
+        await update.message.reply_text("❌ Senha incorreta. Tente novamente:")
+        return ADMIN_SENHA  # Permite tentar novamente
 
 
 # --- Helpers de bloqueio com asyncpg ---
@@ -561,6 +571,32 @@ async def listar_palavras_proibidas_db() -> list[str]:
     rows = await pool.fetch("SELECT palavra FROM palavras_proibidas")
     return [r["palavra"] for r in rows]
 
+
+async def carregar_admins_db():
+    try:
+        registros = await pool.fetch("SELECT user_id FROM admins")
+        return {r['user_id'] for r in registros}
+    except Exception as e:
+        logger.error(f"Erro ao carregar admins do banco: {e}")
+        return set()
+
+async def adicionar_admin_db(user_id: int):
+    try:
+        await pool.execute(
+            "INSERT INTO admins (user_id) VALUES ($1) ON CONFLICT DO NOTHING",
+            user_id
+        )
+    except Exception as e:
+        logger.error(f"Erro ao adicionar admin no banco: {e}")
+
+async def remover_admin_db(user_id: int):
+    try:
+        await pool.execute(
+            "DELETE FROM admins WHERE user_id = $1",
+            user_id
+        )
+    except Exception as e:
+        logger.error(f"Erro ao remover admin do banco: {e}")
 
 # --- Middleware de verificação de bloqueio ---
 async def checar_bloqueio(update: Update, context: CallbackContext):
@@ -1339,9 +1375,10 @@ async def exportar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def on_startup(app):
-    # será executado no mesmo loop do Application
+    global ADMINS
     await init_db_pool()
-    logger.info("✅ Pool asyncpg inicializado e tabelas garantidas.")
+    ADMINS = await carregar_admins_db()
+    logger.info(f"Admins carregados: {ADMINS}")
 
 
 main_conv = ConversationHandler(
@@ -1349,7 +1386,7 @@ main_conv = ConversationHandler(
         CommandHandler("admin", admin, filters=filters.ChatType.PRIVATE),
         CommandHandler("add_pontos", add_pontos),
         # CommandHandler("del_pontos", del_pontos),
-        # CommandHandler("add_admin", add_admin),
+        CommandHandler("add_admin", add_admin),
         # CommandHandler("rem_admin", rem_admin),
         # CommandHandler("rem_pontuador", rem_pontuador),
         # CommandHandler("bloquear", bloquear),
