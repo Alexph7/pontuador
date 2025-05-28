@@ -1009,10 +1009,6 @@ async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-# No topo do módulo, defina um separador para os logs agregados:
-DELIM = '|'  # caractere que não aparece em usernames/nomes
-
-
 async def historico_usuario(update: Update, context: CallbackContext):
     # 0) Autenticação de admin
     requester_id = update.effective_user.id
@@ -1076,7 +1072,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
             " LIMIT $1 OFFSET $2"
         )
         params = (PAGE_SIZE + 1, offset)
-        header = f"🕒 Histórico completo (todos os usuários, página {page}):"
+        header = f"🕒 Histórico completo (todos os usuários, página {page}):\n"
     else:
         sql = (
             "SELECT id, user_id, status, username, first_name, last_name, display_choice, nickname, inserido_em"
