@@ -273,57 +273,57 @@ async def registrar_historico_db(user_id: int, pontos: int, motivo: str | None =
     )
 
 
-async def bloquear_user_bd(user_id: int, motivo: str | None = None):
-    """
-    Bloqueia um usuário registrando o user_id e o motivo na tabela usuarios_bloqueados.
-    Se o usuário já estiver bloqueado, atualiza motivo e timestamp.
-    """
-    await pool.execute(
-        """
-        INSERT INTO usuarios_bloqueados (user_id, motivo)
-        VALUES ($1, $2)
-        ON CONFLICT (user_id)
-        DO UPDATE
-          SET motivo = EXCLUDED.motivo,
-              data   = CURRENT_TIMESTAMP
-        """,
-        user_id,
-        motivo
-    )
+# async def bloquear_user_bd(user_id: int, motivo: str | None = None):
+#     """
+#     Bloqueia um usuário registrando o user_id e o motivo na tabela usuarios_bloqueados.
+#     Se o usuário já estiver bloqueado, atualiza motivo e timestamp.
+#     """
+#     await pool.execute(
+#         """
+#         INSERT INTO usuarios_bloqueados (user_id, motivo)
+#         VALUES ($1, $2)
+#         ON CONFLICT (user_id)
+#         DO UPDATE
+#           SET motivo = EXCLUDED.motivo,
+#               data   = CURRENT_TIMESTAMP
+#         """,
+#         user_id,
+#         motivo
+#     )
 
 
-async def total_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /total_usuarios
-    Retorna o número total de usuários cadastrados na tabela 'usuarios'.
-    Somente admins podem executar.
-    """
-    # 1) Verifica permissão
-    requester_id = update.effective_user.id
-    if requester_id not in ADMINS:
-        await update.message.reply_text("❌ Você não tem permissão para isso.")
-        return
-
-    # 2) Consulta ao banco com timeout
-    try:
-        total = await asyncio.wait_for(
-            pool.fetchval("SELECT COUNT(*) FROM usuarios"),
-            timeout=TEMPO_LIMITE_BUSCA
-        )
-    except asyncio.TimeoutError:
-        await update.message.reply_text(
-            "❌ A consulta demorou demais. Tente novamente mais tarde."
-        )
-        return
-    except Exception as e:
-        logger.error("Erro ao contar usuários: %s", e)
-        await update.message.reply_text(
-            "❌ Erro ao acessar o banco. Tente novamente mais tarde."
-        )
-        return
-
-    # 3) Envia resultado
-    await update.message.reply_text(f"👥 Total de usuários cadastrados: {total}")
+# async def total_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     """
+#     /total_usuarios
+#     Retorna o número total de usuários cadastrados na tabela 'usuarios'.
+#     Somente admins podem executar.
+#     """
+#     # 1) Verifica permissão
+#     requester_id = update.effective_user.id
+#     if requester_id not in ADMINS:
+#         await update.message.reply_text("❌ Você não tem permissão para isso.")
+#         return
+#
+#     # 2) Consulta ao banco com timeout
+#     try:
+#         total = await asyncio.wait_for(
+#             pool.fetchval("SELECT COUNT(*) FROM usuarios"),
+#             timeout=TEMPO_LIMITE_BUSCA
+#         )
+#     except asyncio.TimeoutError:
+#         await update.message.reply_text(
+#             "❌ A consulta demorou demais. Tente novamente mais tarde."
+#         )
+#         return
+#     except Exception as e:
+#         logger.error("Erro ao contar usuários: %s", e)
+#         await update.message.reply_text(
+#             "❌ Erro ao acessar o banco. Tente novamente mais tarde."
+#         )
+#         return
+#
+#     # 3) Envia resultado
+#     await update.message.reply_text(f"👥 Total de usuários cadastrados: {total}")
 
 
 async def atualizar_pontos(
@@ -508,22 +508,22 @@ async def bloquear_usuario_id(update: Update, context: CallbackContext):
         return await update.message.reply_text("❌ ID inválido. Tente novamente.")
 
 
-async def bloquear_usuario_motivo(update: Update, context: CallbackContext):
-    motivo = update.message.text
-    user_id = context.user_data["bloquear_id"]
-    await bloquear_user_bd(user_id, motivo)
-    await update.message.reply_text(f"✅ Usuário {user_id} bloqueado. Motivo: {motivo}")
-    return ConversationHandler.END
+# async def bloquear_usuario_motivo(update: Update, context: CallbackContext):
+#     motivo = update.message.text
+#     user_id = context.user_data["bloquear_id"]
+#     await bloquear_user_bd(user_id, motivo)
+#     await update.message.reply_text(f"✅ Usuário {user_id} bloqueado. Motivo: {motivo}")
+#     return ConversationHandler.END
 
 
-async def desbloquear_user_bd(user_id: int):
-    await pool.execute(
-        "DELETE FROM usuarios_bloqueados WHERE user_id = $1",
-        user_id
-    )
+# async def desbloquear_user_bd(user_id: int):
+#     await pool.execute(
+#         "DELETE FROM usuarios_bloqueados WHERE user_id = $1",
+#         user_id
+#     )
 
 
-async def obter_bloqueado(user_id: int):
+# async def obter_bloqueado(user_id: int):
     return await pool.fetchrow(
         "SELECT motivo FROM usuarios_bloqueados WHERE user_id = $1",
         user_id
@@ -599,37 +599,37 @@ async def remover_admin_db(user_id: int):
         logger.error(f"Erro ao remover admin do banco: {e}")
 
 # --- Middleware de verificação de bloqueio ---
-async def checar_bloqueio(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    reg = await obter_bloqueado(user_id)  # agora await
-    if reg:
-        motivo = reg['motivo'] or 'sem motivo especificado'
-        await update.message.reply_text(f"⛔ Você está bloqueado. Motivo: {motivo}")
-        raise ApplicationHandlerStop()
+# async def checar_bloqueio(update: Update, context: CallbackContext):
+#     user_id = update.effective_user.id
+#     reg = await obter_bloqueado(user_id)  # agora await
+#     if reg:
+#         motivo = reg['motivo'] or 'sem motivo especificado'
+#         await update.message.reply_text(f"⛔ Você está bloqueado. Motivo: {motivo}")
+#         raise ApplicationHandlerStop()
 
 
 # --- Handlers de bloqueio ---
-async def bloquear_usuario(update: Update, context: CallbackContext):
-    if update.effective_user.id != ID_ADMIN:
-        return await update.message.reply_text("🔒 Apenas admin pode usar.")
-    try:
-        alvo = int(context.args[0])
-    except:
-        return await update.message.reply_text("Uso: /bloquear <user_id> [motivo]")
-    motivo = ' '.join(context.args[1:]) or None
-    await bloquear_user_bd(alvo, motivo)  # await aqui
-    await update.message.reply_text(f"✅ Usuário {alvo} bloqueado. Motivo: {motivo or 'nenhum'}")
+# async def bloquear_usuario(update: Update, context: CallbackContext):
+#     if update.effective_user.id != ID_ADMIN:
+#         return await update.message.reply_text("🔒 Apenas admin pode usar.")
+#     try:
+#         alvo = int(context.args[0])
+#     except:
+#         return await update.message.reply_text("Uso: /bloquear <user_id> [motivo]")
+#     motivo = ' '.join(context.args[1:]) or None
+#     await bloquear_user_bd(alvo, motivo)  # await aqui
+#     await update.message.reply_text(f"✅ Usuário {alvo} bloqueado. Motivo: {motivo or 'nenhum'}")
 
 
-async def desbloquear_usuario(update: Update, context: CallbackContext):
-    if update.effective_user.id != ID_ADMIN:
-        return await update.message.reply_text("🔒 Apenas admin pode usar.")
-    try:
-        alvo = int(context.args[0])
-    except:
-        return await update.message.reply_text("Uso: /desbloquear <user_id>")
-    await desbloquear_user_bd(alvo)  # await aqui
-    await update.message.reply_text(f"✅ Usuário {alvo} desbloqueado.")
+# async def desbloquear_usuario(update: Update, context: CallbackContext):
+#     if update.effective_user.id != ID_ADMIN:
+#         return await update.message.reply_text("🔒 Apenas admin pode usar.")
+#     try:
+#         alvo = int(context.args[0])
+#     except:
+#         return await update.message.reply_text("Uso: /desbloquear <user_id>")
+#     await desbloquear_user_bd(alvo)  # await aqui
+#     await update.message.reply_text(f"✅ Usuário {alvo} desbloqueado.")
 
 
 # --- Handlers de palavras proibidas ---
@@ -1339,39 +1339,39 @@ async def callback_listar_usuarios(update: Update, context: ContextTypes.DEFAULT
     return await listar_usuarios(query, context)
 
 
-async def exportar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /exportar_usuarios
-    Exporta todos os usuários em arquivo CSV.
-    Somente ADMINS podem executar.
-    """
-    user_id = update.effective_user.id
-    if user_id not in ADMINS:
-        return await update.message.reply_text("❌ Você não tem permissão para isso.")
-
-    try:
-        rows = await asyncio.wait_for(
-            pool.fetch("SELECT user_id, first_name FROM usuarios ORDER BY user_id"),
-            timeout=TEMPO_LIMITE_BUSCA
-        )
-    except Exception as e:
-        logger.error("Erro ao exportar usuários: %s", e)
-        return await update.message.reply_text("❌ Erro ao acessar o banco.")
-
-    if not rows:
-        return await update.message.reply_text("ℹ️ Nenhum usuário para exportar.")
-
-    # Cria CSV em memória
-    buffer = io.StringIO()
-    writer = csv.writer(buffer)
-    writer.writerow(['user_id', 'first_name'])
-    for r in rows:
-        writer.writerow([r['user_id'], r['first_name'] or ''])
-    buffer.seek(0)
-
-    # Envia como arquivo
-    file = InputFile(buffer, filename='usuarios.csv')
-    await update.message.reply_document(document=file, filename='usuarios.csv')
+# async def exportar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     """
+#     /exportar_usuarios
+#     Exporta todos os usuários em arquivo CSV.
+#     Somente ADMINS podem executar.
+#     """
+#     user_id = update.effective_user.id
+#     if user_id not in ADMINS:
+#         return await update.message.reply_text("❌ Você não tem permissão para isso.")
+#
+#     try:
+#         rows = await asyncio.wait_for(
+#             pool.fetch("SELECT user_id, first_name FROM usuarios ORDER BY user_id"),
+#             timeout=TEMPO_LIMITE_BUSCA
+#         )
+#     except Exception as e:
+#         logger.error("Erro ao exportar usuários: %s", e)
+#         return await update.message.reply_text("❌ Erro ao acessar o banco.")
+#
+#     if not rows:
+#         return await update.message.reply_text("ℹ️ Nenhum usuário para exportar.")
+#
+#     # Cria CSV em memória
+#     buffer = io.StringIO()
+#     writer = csv.writer(buffer)
+#     writer.writerow(['user_id', 'first_name'])
+#     for r in rows:
+#         writer.writerow([r['user_id'], r['first_name'] or ''])
+#     buffer.seek(0)
+#
+#     # Envia como arquivo
+#     file = InputFile(buffer, filename='usuarios.csv')
+#     await update.message.reply_document(document=file, filename='usuarios.csv')
 
 
 async def on_startup(app):
@@ -1445,20 +1445,20 @@ main_conv = ConversationHandler(
         # ],
 
         # /bloquear → id, motivo
-        BLOQUEAR_ID: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, bloquear_usuario_id),
-            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
-        ],
-        BLOQUEAR_MOTIVO: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, bloquear_usuario_motivo),
-            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
-        ],
-
-        # /desbloquear → id
-        DESBLOQUEAR_ID: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, desbloquear_usuario),
-            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
-        ],
+        # BLOQUEAR_ID: [
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, bloquear_usuario_id),
+        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        # ],
+        # BLOQUEAR_MOTIVO: [
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, bloquear_usuario_motivo),
+        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        # ],
+        #
+        # # /desbloquear → id
+        # DESBLOQUEAR_ID: [
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, desbloquear_usuario),
+        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        # ],
 
         # # /add_palavra_proibida → palavra
         # ADD_PALAVRA_PROIBIDA: [
@@ -1521,9 +1521,9 @@ async def main():
     app.add_handler(
         CommandHandler("listar_usuarios", listar_usuarios)
     )
-    app.add_handler(
-        CommandHandler("total_usuarios", total_usuarios)
-    )
+    # app.add_handler(
+    #     CommandHandler("total_usuarios", total_usuarios)
+    # )
 
     # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
