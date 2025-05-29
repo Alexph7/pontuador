@@ -80,7 +80,6 @@ TEMPO_LIMITE_BUSCA = 10  # Tempo máximo (em segundos) para consulta
 async def init_db_pool():
     global pool, ADMINS
     pool = await asyncpg.create_pool(dsn=DATABASE_URL, min_size=1, max_size=10)
-    ADMINS = await carregar_admins_db()
     async with pool.acquire() as conn:
         # Criação de tabelas se não existirem
         await conn.execute("""
@@ -133,7 +132,7 @@ async def init_db_pool():
             nickname        VARCHAR(50)
         );
         """)
-
+    ADMINS = await carregar_admins_db()
 
 # --- Helpers de usuário (asyncpg) ---
 PAGE_SIZE = 22
