@@ -528,10 +528,10 @@ async def meus_pontos(update: Update, context: CallbackContext):
         if nivel == 0:
             nivel_texto = "Rumo ao Nível 1"
         else:
-            nivel_texto = f"Nível {nivel}"
+            nivel_texto = f"Eba ja alcançou brinde de Nível {nivel}"
 
         await update.message.reply_text(
-            f"🎉 Você tem {pontos} pontos ({nivel_texto})."
+            f"🎉 Você tem {pontos} pontos {nivel_texto}."
         )
 
     except Exception as e:
@@ -548,12 +548,12 @@ async def como_ganhar(update: Update, context: CallbackContext):
         for pontos, descricao in sorted(NIVEIS_BRINDES.items())
     )
     await update.message.reply_text(
-        "🎯 Você Pode Ganha Pontos Por:\n\n"
-        "• Compras por ID em videos.\n\n"
-        "• Até 1 comentário diario em grupos ou interação com bot\n\n"
+        "🎯 Você Pode Ganha Pontos Por:\n"
+        "• Compras por ID em videos.\n"
+        "• Até 1 comentário diario em grupos ou interação com bot\n"
         "• Muito cedo, mais opções de como ganhar pontos aparecerá em breve. \n\n"
         "💸 Como Você Pode Perder Pontos:\n"
-        "• Trocas por brindes, desconta os pontos.\n\n"
+        "• Trocas por brindes, desconta os pontos.\n"
         "• Produto devolvido (se aplicar)\n\n"
          f"{brindes_texto}\n\n"
         "Use /meus_pontos para ver seu total!"
