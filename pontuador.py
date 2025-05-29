@@ -65,7 +65,7 @@ NIVEIS_BRINDES = {
     300: "🎁 Brinde nível 2",
     500: "🎁 Brinde nível 3",
     750: "🎁 Brinde nível 4",
-    1000: "🎁 Brinde nível 5"
+   1000: "🎁 Brinde nível 5"
 }
 
 #Estados da conversa
@@ -857,7 +857,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
     if not rows:
         alvo = f" para `{target_id}`" if target_id else ""
         await update.message.reply_text(
-            f"ℹ️ Sem histórico{alvo} na página {page}."
+            f"ℹ️ Sem histórico{alvo} na página {page}. ", parse_mode="MarkdownV2"
         )
         return
 
