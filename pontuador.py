@@ -48,7 +48,6 @@ if not BOT_TOKEN:
 DATABASE_URL = os.getenv('DATABASE_URL')
 ID_ADMIN = int(os.getenv('ID_ADMIN'))
 LIMIAR_PONTUADOR = 500
-NIVEIS_BRINDES = {1000: 'Brinde Nível 1', 2000: 'Brinde Nível 2'}
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 
 ADMIN_IDS = os.getenv("ADMIN_IDS", "")
@@ -522,9 +521,19 @@ async def meus_pontos(update: Update, context: CallbackContext):
             first_name=user.first_name or "vazio",
             last_name=user.last_name or "vazio",
         )
+
+        pontos = perfil['pontos']
+        nivel = perfil['nivel_atingido']
+
+        if nivel == 0:
+            nivel_texto = "Rumo ao Nível 1"
+        else:
+            nivel_texto = f"Nível {nivel}"
+
         await update.message.reply_text(
-            f"🎉 Você tem {perfil['pontos']} pontos (Nível {perfil['nivel_atingido']})."
+            f"🎉 Você tem {pontos} pontos ({nivel_texto})."
         )
+
     except Exception as e:
         logger.error(f"Erro ao buscar pontos do usuário {user.id}: {e}", exc_info=True)
         await update.message.reply_text(
@@ -532,13 +541,21 @@ async def meus_pontos(update: Update, context: CallbackContext):
             "Tente novamente mais tarde. Se o problema persistir contate o suporte."
         )
 
-
 async def como_ganhar(update: Update, context: CallbackContext):
+    # Ordena os brindes por nível de pontos
+    brindes_texto = "\n".join(
+        f"• {pontos} pontos – {descricao}"
+        for pontos, descricao in sorted(NIVEIS_BRINDES.items())
+    )
     await update.message.reply_text(
         "🎯 Você Pode Ganha Pontos Por:\n\n"
-        "• Compras por ID em videos.\n"
-        "• Até 1 comentário diario em grupos ou interação com bot\n"
+        "• Compras por ID em videos.\n\n"
+        "• Até 1 comentário diario em grupos ou interação com bot\n\n"
         "• Muito cedo, mais opções de como ganhar pontos aparecerá em breve. \n\n"
+        "💸 Como Você Pode Perder Pontos:\n"
+        "• Trocas por brindes, desconta os pontos.\n\n"
+        "• Produto devolvido (se aplicar)\n\n"
+         f"{brindes_texto}\n\n"
         "Use /meus_pontos para ver seu total!"
     )
 
