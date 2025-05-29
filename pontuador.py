@@ -526,7 +526,7 @@ async def meus_pontos(update: Update, context: CallbackContext):
         nivel = perfil['nivel_atingido']
 
         if nivel == 0:
-            nivel_texto = "Rumo ao Nível 1"
+            nivel_texto = "rumo ao Nível 1"
         else:
             nivel_texto = f"Eba ja alcançou brinde de Nível {nivel}"
 
@@ -548,12 +548,14 @@ async def como_ganhar(update: Update, context: CallbackContext):
         for pontos, descricao in sorted(NIVEIS_BRINDES.items())
     )
     await update.message.reply_text(
-        "🎯 Você Pode Ganha Pontos Por:\n"
+        "🎯 Você Pode Ganha Pontos Por:\n\n"
         "• Compras por ID em videos.\n"
         "• Até 1 comentário diario em grupos ou interação com bot\n"
         "• Muito cedo, mais opções de como ganhar pontos aparecerá em breve. \n\n"
         "💸 Como Você Pode Perder Pontos:\n"
         "• Trocas por brindes, desconta os pontos.\n"
+        "• troca de ciclo ou fim do evento, os pontos zeram\n"
+        "• Comportamento spamming, banimento\n"
         "• Produto devolvido (se aplicar)\n\n"
          f"{brindes_texto}\n\n"
         "Use /meus_pontos para ver seu total!"
@@ -726,9 +728,9 @@ async def ranking_top10(update: Update, context: CallbackContext):
             # fallback: usa username ou first_name
             display = u["username"] or u["first_name"] or "Usuário"
 
-        linhas.append(f"{i + 1}. {display} – {u['pontos']} pts")
+        linhas.append(f"{i + 1}. {display.upper()} – {u['pontos']} pts")
 
-    texto = "\n".join(linhas)
+    texto = "\n\n".join(linhas)
     await update.message.reply_text(texto)
 
 
