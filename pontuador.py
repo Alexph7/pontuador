@@ -537,11 +537,8 @@ async def como_ganhar(update: Update, context: CallbackContext):
     await update.message.reply_text(
         "🎯 Você Pode Ganha Pontos Por:\n\n"
         "• Compras por ID em videos.\n"
-        "• Até 1 comentário diario em grupos\n"
-        "• Indicar links de lives com moedas\n"
-        #"• Receber pontuações de outros usuários por ajuda\n"
-        #"• Receber pontuações por convites ⓘ\n"
-        "• Mais opções em Breve. \n\n"
+        "• Até 1 comentário diario em grupos ou interação com bot\n"
+        "• Muito cedo, mais opções de como ganhar pontos aparecerá em breve. \n\n"
         "Use /meus_pontos para ver seu total!"
     )
 
