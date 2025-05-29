@@ -679,7 +679,7 @@ async def historico(update: Update, context: CallbackContext):
           FROM historico_pontos
          WHERE user_id = $1
       ORDER BY data DESC
-         LIMIT 25
+         LIMIT 60
         """,
         user.id
     )
@@ -687,10 +687,10 @@ async def historico(update: Update, context: CallbackContext):
         await update.message.reply_text("🗒️ Nenhum registro de histórico encontrado.")
         return
     lines = [
-        f"{r['data'].strftime('%d/%m %H:%M')}: {r['pontos']} pts - {r['motivo']}"
+        f"📅 {r['data'].strftime('%d/%m %H:%M')}: {r['pontos']} pts - {r['motivo']}"
         for r in rows
     ]
-    await update.message.reply_text("🗒️ Seu histórico:\n" + "\n".join(lines))
+    await update.message.reply_text("🗒️ Seu histórico de pontos:\n\n" + "\n\n".join(lines))
 
 
 async def ranking_top10(update: Update, context: CallbackContext):
