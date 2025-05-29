@@ -467,10 +467,11 @@ ADMIN_MENU = (
 )
 
 
+# Comando de admin
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+
     if user_id in ADMINS:
-        context.user_data["is_admin"] = True
         await update.message.reply_text(ADMIN_MENU)
         return ConversationHandler.END
 
@@ -483,14 +484,13 @@ async def tratar_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     senha = update.message.text.strip()
 
     if senha == str(ADMIN_PASSWORD):
-        await adicionar_admin_db(user_id)  # Adiciona no banco
-        ADMINS.add(user_id)                 # Adiciona na memória
-        context.user_data["is_admin"] = True
+        await adicionar_admin_db(user_id)  # Salva no banco se quiser persistência
+        ADMINS.add(user_id)                # Salva na memória enquanto o bot roda
         await update.message.reply_text(ADMIN_MENU)
         return ConversationHandler.END
     else:
         await update.message.reply_text("❌ Senha incorreta. Tente novamente:")
-        return ADMIN_SENHA  # Permite tentar novamente
+        return ADMIN_SENHA
 
 
 # --- Helpers de bloqueio com asyncpg ---
@@ -847,10 +847,13 @@ async def add_pontos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         Verifica se o usuário possui permissão temporária (senha válida) e
         pergunta qual é o user_id que receberá pontos.
         """
-    # Verifica permissão temporária
-    if not context.user_data.get("is_admin"):
-        return await update.message.reply_text("🔒 Você precisa autenticar como admin primeiro.")
-    # Inicia a conversa
+    requester_id = update.effective_user.id
+    if update.effective_user.id not in ADMINS:
+        await update.message.reply_text(
+            "🔒 Você precisa autenticar: use /admin primeiro."
+        )
+        return ConversationHandler.END
+
     await update.message.reply_text("📋 Atribuir pontos: primeiro, qual é o user_id?")
     return ADD_PONTOS_POR_ID
 
@@ -870,55 +873,46 @@ async def add_pontos_IDuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def add_pontos_quantidade(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-        Recebe a quantidade de pontos a ser atribuída.
-        Valida se é número inteiro. Se válido, armazena em user_data
-        e pergunta o motivo da atribuição.
-        """
     text = update.message.text.strip()
     if not text.isdigit():
-        return await update.message.reply_text("❗️ Valor inválido. Digite somente números para os pontos.")
-    context.user_data["add_pt_value"] = int(text)
+        return await update.message.reply_text("❗️ Valor inválido. Digite somente números positivos para os pontos.")
+
+    qtd = int(text)
+
+    if qtd <= 0:
+        return await update.message.reply_text("❗️ O valor deve ser maior que zero.")
+
+    context.user_data["add_pt_value"] = qtd
     await update.message.reply_text("📝 Por fim, qual o motivo para registrar no histórico?")
     return ADD_PONTOS_MOTIVO
 
 
 async def add_pontos_motivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-        Recebe o motivo da atribuição de pontos.
-        Valida se não está vazio. Se válido, recupera todos os dados de user_data,
-        verifica a existência do usuário, faz a atualização cumulativa no banco
-        e envia a confirmação. Encerra a conversa.
-        """
     motivo = update.message.text.strip()
     if not motivo:
         return await update.message.reply_text("❗️ Motivo não pode ficar em branco. Digite um texto.")
     context.user_data["add_pt_reason"] = motivo
 
-    # Todos os dados coletados, processa a atualização
     alvo_id = context.user_data.pop("add_pt_id")
-    pontos = context.user_data.pop("add_pt_value")
-    motivo = context.user_data.pop("add_pt_reason")
+    pontos   = context.user_data.pop("add_pt_value")
+    motivo   = context.user_data.pop("add_pt_reason")
 
-    usuario = await obter_ou_criar_usuario_db(alvo_id)
+    # CHAMADA IGUAL AO /start, com 'vazio' para username/nome de quem não interagiu
+    usuario = await obter_ou_criar_usuario_db(
+        user_id=alvo_id,
+        username="Aguardando interação",
+        first_name="Aguardando interação",
+        last_name="Aguardando interação"
+    )
     if not usuario:
         return await update.message.reply_text("❌ Usuário não encontrado. Cancelando operação.")
 
     novo_total = await atualizar_pontos(alvo_id, pontos, motivo, context.bot)
     await update.message.reply_text(
-        f"✅ {pontos} pts atribuídos a {alvo_id}.\n"
+        f"✅ {pontos} pts atribuídos a {alvo_id}.\n"
         f"Motivo: {motivo}\n"
-        f"Total agora: {novo_total} pts."
+        f"Total agora: {novo_total} pts."
     )
-    return ConversationHandler.END
-
-
-async def add_pontos_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-      Handler de fallback para cancelar o fluxo de atribuição de pontos.
-      Envia mensagem de cancelamento e encerra a conversa.
-      """
-    await update.message.reply_text("❌ Operação cancelada.")
     return ConversationHandler.END
 
 
@@ -1060,10 +1054,9 @@ async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
 async def historico_usuario(update: Update, context: CallbackContext):
     # 0) Autenticação de admin
     requester_id = update.effective_user.id
-    if not context.user_data.get("is_admin"):
-        await update.message.reply_text(
-            "🔒 Você precisa autenticar: use /admin primeiro."
-        )
+
+    if requester_id not in ADMINS:
+        await update.message.reply_text("🔒 Você precisa autenticar: use /admin primeiro.")
         return ConversationHandler.END
 
     # 1) Detecta callback ou comando normal
@@ -1478,9 +1471,11 @@ main_conv = ConversationHandler(
 
 # --- Inicialização do bot ---
 async def main():
-    # 1) inicializa o pool ANTES de criar o Application
+    global ADMINS
+
     await init_db_pool()
-    # 2) agora monte o bot
+    ADMINS = await carregar_admins_db()
+
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
