@@ -95,7 +95,7 @@ async def init_db_pool():
             inserido_em        TIMESTAMP NOT NULL DEFAULT NOW(),    -- quando o usuário foi inserido
             atualizado_em      TIMESTAMP NOT NULL DEFAULT NOW(),     -- quando qualquer coluna for atualizada
             display_choice     VARCHAR(20) NOT NULL DEFAULT 'indefinido',
-            nickname           VARCHAR(50)
+            nickname           VARCHAR(50) NOT NULL DEFAULT 'sem nick'
         );
 
        CREATE TABLE IF NOT EXISTS historico_pontos (
@@ -129,7 +129,7 @@ async def init_db_pool():
             last_name    TEXT      NOT NULL DEFAULT 'vazio',
             inserido_em  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             display_choice  VARCHAR(20) NOT NULL DEFAULT 'indefinido',
-            nickname        VARCHAR(50)
+            nickname        VARCHAR(50) NOT NULL DEFAULT 'sem nick'
         );
         """)
     ADMINS = await carregar_admins_db()
@@ -146,7 +146,7 @@ async def adicionar_usuario_db(
         first_name: str = "vazio",
         last_name: str = "vazio",
         display_choice: str = "indefinido",
-        nickname: str | None = None,
+        nickname: str = "sem nick",
         pool_override: asyncpg.Pool | None = None,
 ):
     pg = pool_override or pool
@@ -259,7 +259,7 @@ async def obter_ou_criar_usuario_db(user_id: int, username: str, first_name: str
         await pool.execute(
             "INSERT INTO usuarios (user_id, username, first_name, last_name, display_choice, nickname) "
             "VALUES ($1, $2, $3, $4, $5, $6)",
-            user_id, username or "vazio", first_name or "vazio", last_name or "vazio", "indefinido", None
+            user_id, username or "vazio", first_name or "vazio", last_name or "vazio", "indefinido", "sem nick"
         )
         perfil = await pool.fetchrow("SELECT * FROM usuarios WHERE user_id = $1", user_id)
     return perfil
@@ -278,15 +278,16 @@ async def registrar_historico_db(user_id: int, pontos: int, motivo: str | None =
     )
 
 
-def escape_markdown_v2(text: str) -> str:
-    """
-    Escapa caracteres reservados do MarkdownV2.
-    Se receber None, retorna um traço '—'.
-    """
+def escape_markdown_v2(text: str | None) -> str:
     if text is None:
-        return "—"
-    escape_chars = r'_*[]()~`>#+-=|{}.!'
-    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', str(text))
+        text = ''
+    return re.sub(r'([_*\[\]()~`>#+\-=|{}.!\\])', r'\\\1', str(text))
+
+def escape_md2_code(text: str | None) -> str:
+    if text is None:
+        text = ''
+    return str(text).replace('\\', '\\\\').replace('`', '\\`')
+
 
 
 # Mensagem de Mural de Entrada
@@ -448,7 +449,7 @@ async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TY
             first_name=user.first_name or "vazio",
             last_name=user.last_name or "vazio",
             display_choice="first_name",
-            nickname=None,
+            nickname="sem nick",
         )
         await query.edit_message_text("👍 Ok, você aparecerá com seu nome normal, para prosseguir escolha uma opção no menú ao lado.")
         return ConversationHandler.END
@@ -759,7 +760,7 @@ async def tratar_presenca(update, context):
     # 1) Garante que exista sem logar toda vez
     await adicionar_usuario_db(user_id=user.id, username=user.username or "vazio",
                                first_name=user.first_name or "vazio", last_name=user.last_name or "vazio",
-                               display_choice="anonymous", nickname=None)
+                               display_choice="anonymous", nickname="sem nick")
     # 2) Busca registro completo
     reg = await obter_ou_criar_usuario_db(
         user_id=user.id,
@@ -891,14 +892,14 @@ async def historico_usuario(update: Update, context: CallbackContext):
     for r in rows:
         ts_str = r["inserido_em"].strftime("%d/%m %H:%M")
         prefix = r["status"]  # 'Inserido' ou 'Atualizado'
-        user_part = f"`{r['user_id']}` " if target_id is None else ""
+        user_part = f"`{escape_md2_code(str(r['user_id']))}` " if target_id is None else ""
         lines.append(
-            f"{ts_str} — {user_part}*{prefix}*: "
-            f"username: `{escape_markdown_v2(r['username'])}` "
-            f"firstname: `{escape_markdown_v2(r['first_name'])}` "
-            f"lastname: `{escape_markdown_v2(r['last_name'])}` "
-            f"display_choice: `{escape_markdown_v2(str(r['display_choice']))}` "
-            f"nickname: `{escape_markdown_v2(r['nickname'])}` \n"
+            f"{escape_markdown_v2(ts_str)} — {user_part}*{escape_markdown_v2(prefix)}*: "
+            f"username: `{escape_md2_code(r['username'])}` "
+            f"firstname: `{escape_md2_code(r['first_name'])}` "
+            f"lastname: `{escape_md2_code(r['last_name'])}` "
+            f"display_choice: `{escape_md2_code(str(r['display_choice']))}` "
+            f"nickname: `{escape_md2_code(r['nickname'])}` \n"
         )
 
     texto = "\n".join(lines)
@@ -922,13 +923,14 @@ async def historico_usuario(update: Update, context: CallbackContext):
             )
         )
     markup = InlineKeyboardMarkup([botoes]) if botoes else None
-
+    print(texto)
     # 9) Envia a resposta
     await update.message.reply_text(
         texto,
         parse_mode="MarkdownV2",
         reply_markup=markup
     )
+
 
     # 10) Log de auditoria
     logger.info(
