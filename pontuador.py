@@ -94,7 +94,7 @@ async def init_db_pool():
             ultima_interacao   DATE,                                -- só para pontuar 1x/dia
             inserido_em        TIMESTAMP NOT NULL DEFAULT NOW(),    -- quando o usuário foi inserido
             atualizado_em      TIMESTAMP NOT NULL DEFAULT NOW(),     -- quando qualquer coluna for atualizada
-            display_choice     VARCHAR(20) NOT NULL DEFAULT 'anonymous',
+            display_choice     VARCHAR(20) NOT NULL DEFAULT 'indefinido',
             nickname           VARCHAR(50)
         );
 
@@ -128,7 +128,7 @@ async def init_db_pool():
             first_name   TEXT      NOT NULL DEFAULT 'vazio',
             last_name    TEXT      NOT NULL DEFAULT 'vazio',
             inserido_em  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            display_choice  VARCHAR(20) NOT NULL DEFAULT 'anonymous',
+            display_choice  VARCHAR(20) NOT NULL DEFAULT 'indefinido',
             nickname        VARCHAR(50)
         );
         """)
@@ -145,7 +145,7 @@ async def adicionar_usuario_db(
         username: str = "vazio",
         first_name: str = "vazio",
         last_name: str = "vazio",
-        display_choice: str = "anonymous",
+        display_choice: str = "indefinido",
         nickname: str | None = None,
         pool_override: asyncpg.Pool | None = None,
 ):
@@ -259,7 +259,7 @@ async def obter_ou_criar_usuario_db(user_id: int, username: str, first_name: str
         await pool.execute(
             "INSERT INTO usuarios (user_id, username, first_name, last_name, display_choice, nickname) "
             "VALUES ($1, $2, $3, $4, $5, $6)",
-            user_id, username or "vazio", first_name or "vazio", last_name or "vazio", "anonymous", None
+            user_id, username or "vazio", first_name or "vazio", last_name or "vazio", "indefinido", None
         )
         perfil = await pool.fetchrow("SELECT * FROM usuarios WHERE user_id = $1", user_id)
     return perfil
@@ -695,7 +695,27 @@ async def historico(update: Update, context: CallbackContext):
 
 
 async def ranking_top10(update: Update, context: CallbackContext):
-    # 1) Busca também display_choice, nickname e first_name
+    user = update.effective_user
+
+    # 🔍 1) Verifica se o próprio usuário pode ver o ranking
+    perfil = await pool.fetchrow(
+        "SELECT display_choice FROM usuarios WHERE user_id = $1", user.id
+    )
+
+    if perfil is None:
+        await update.message.reply_text(
+            "⚠️ Você ainda não está cadastrado. Use /start para se cadastrar."
+        )
+        return
+
+    if perfil["display_choice"] == "indefinido":
+        await update.message.reply_text(
+            "⚠️ Para acessar o ranking, primeiro escolha como seu nome deve aparecer.\n\n"
+            "Use /start para fazer essa escolha."
+        )
+        return
+
+    # 🏅 2) Busca os top 10 que já escolheram como aparecer
     top = await pool.fetch(
         """
         SELECT
@@ -706,25 +726,25 @@ async def ranking_top10(update: Update, context: CallbackContext):
             nickname,
             pontos
         FROM usuarios
+        WHERE display_choice != 'indefinido'
         ORDER BY pontos DESC
         LIMIT 10
         """
     )
+
     if not top:
-        await update.message.reply_text("🏅 Nenhum usuário cadastrado.")
+        await update.message.reply_text("🏅 Nenhum usuário cadastrado no ranking.")
         return
 
-    # 2) Monta o texto com base na escolha de display de cada um
+    # 🏆 3) Monta o texto com base na escolha de display de cada um
     linhas = ["🏅 Top 10 de pontos:"]
     for i, u in enumerate(top):
         choice = u["display_choice"]
         if choice == "first_name":
             display = u["first_name"] or u["username"] or "Usuário"
         elif choice in ("nickname", "anonymous"):
-            # tanto o apelido digitado quanto o anônimo já estão em nickname
             display = u["nickname"] or u["username"] or "Usuário"
         else:
-            # fallback: usa username ou first_name
             display = u["username"] or u["first_name"] or "Usuário"
 
         linhas.append(f"{i + 1}. {display.upper()} – {u['pontos']} pts")
@@ -741,7 +761,12 @@ async def tratar_presenca(update, context):
                                first_name=user.first_name or "vazio", last_name=user.last_name or "vazio",
                                display_choice="anonymous", nickname=None)
     # 2) Busca registro completo
-    reg = await obter_ou_criar_usuario_db(user.id)
+    reg = await obter_ou_criar_usuario_db(
+        user_id=user.id,
+        username=user.username or "vazio",
+        first_name=user.first_name or "vazio",
+        last_name=user.last_name or "vazio"
+    )
 
     # 3) Dá pontuação uma única vez por dia,
     #    extraindo só a data do último timestamp
@@ -818,7 +843,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
         target_id, page = int(args[0]), int(args[1])
     elif args:
         await update.message.reply_text(
-            "❌ Uso incorreto. Digite `/historico_usuario ajuda`.",
+            "Uso incorreto. Digite `/historico_usuario ajuda`",
             parse_mode="MarkdownV2"
         )
         return ConversationHandler.END
@@ -857,7 +882,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
     if not rows:
         alvo = f" para `{target_id}`" if target_id else ""
         await update.message.reply_text(
-            f"ℹ️ Sem histórico{alvo} na página {page}. ", parse_mode="MarkdownV2"
+            f"ℹ️ Sem histórico{alvo} na página {page} ", parse_mode="MarkdownV2"
         )
         return
 
