@@ -797,10 +797,12 @@ async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+import html
+from telegram.constants import ParseMode
+
 async def historico_usuario(update: Update, context: CallbackContext):
     # 0) Autenticação de admin
     requester_id = update.effective_user.id
-
     if requester_id not in ADMINS:
         await update.message.reply_text("🔒 Você precisa autenticar: use /admin primeiro.")
         return ConversationHandler.END
@@ -812,28 +814,30 @@ async def historico_usuario(update: Update, context: CallbackContext):
             "ℹ️ Se precisar de ajuda, digite /historico_usuario ajuda"
         )
 
-    # 2) Texto de ajuda (exibido só em `/ajuda`)
-    AJUDA_HISTORICO = (
-        "*📘 Ajuda: /historico_usuario*\n\n"
+    # 2) Ajuda
+    AJUDA_HISTORICO_HTML = html.escape(
+        "📘 Ajuda: /historico_usuario\n\n"
         "Este comando retorna o histórico de alterações dos usuários.\n\n"
-        "*Formas de uso:*\n"
-        "`/historico_usuario` – Mostra os usuários sem filtro.\n"
-        "`/historico_usuario <user_id>` – Mostra o histórico de um usuário.\n"
-        "`/historico_usuario <user_id> <página>` – Página desejada.\n\n"
-        "*Exemplos:*\n"
-        "`/historico_usuario`\n"
-        "`/historico_usuario 123456789`\n"
-        "`/historico_usuario 123456789 2`\n\n"
-        f"*ℹ️ Cada página exibe até {PAGE_SIZE} registros.*"
+        "Formas de uso:\n"
+        "/historico_usuario – Mostra todos os usuários.\n"
+        "/historico_usuario <user_id> – Hist. de um usuário.\n"
+        "/historico_usuario <user_id> <página> – Página desejada.\n\n"
+        "Exemplos:\n"
+        "/historico_usuario\n"
+        "/historico_usuario 123456789\n"
+        "/historico_usuario 123456789 2\n\n"
+        f"ℹ️ Cada página exibe até {PAGE_SIZE} registros."
     )
-    args = context.args or []
-    if len(args) == 1 and args[0].lower() == "ajuda":
+    if context.args and len(context.args) == 1 and context.args[0].lower() == "ajuda":
+        # envolve em <pre> para preservar quebras de linha na ajuda
         await update.message.reply_text(
-            AJUDA_HISTORICO, parse_mode="MarkdownV2"
+            f"<pre>{AJUDA_HISTORICO_HTML}</pre>",
+            parse_mode=ParseMode.HTML
         )
         return ConversationHandler.END
 
-    # 3) Parsing de arguments: target_id e page
+    # 3) Parsing de argumentos
+    args = context.args or []
     target_id = None
     page = 1
     if len(args) == 1 and args[0].isdigit() and is_callback:
@@ -844,93 +848,94 @@ async def historico_usuario(update: Update, context: CallbackContext):
         target_id, page = int(args[0]), int(args[1])
     elif args:
         await update.message.reply_text(
-            "Uso incorreto. Digite `/historico_usuario ajuda`",
-            parse_mode="MarkdownV2"
+            "Uso incorreto. Digite /historico_usuario ajuda",
+            parse_mode=ParseMode.HTML
         )
         return ConversationHandler.END
 
     offset = (page - 1) * PAGE_SIZE
 
+    # 4) Monta SQL e cabeçalho
     if target_id is None:
         sql = (
-            "SELECT id, user_id, status, username, first_name, last_name, display_choice, nickname, inserido_em"
-            " FROM usuario_history"
-            " ORDER BY inserido_em DESC, id DESC"
-            " LIMIT $1 OFFSET $2"
+            "SELECT id, user_id, status, username, first_name, last_name, "
+            "display_choice, nickname, inserido_em "
+            "FROM usuario_history "
+            "ORDER BY inserido_em DESC, id DESC "
+            "LIMIT $1 OFFSET $2"
         )
         params = (PAGE_SIZE + 1, offset)
-        header = f"🕒 Histórico completo (todos os usuários, página {page}):\n"
+        header = f"🕒 <b>Histórico completo (todos os usuários, página {page}):</b>"
     else:
         sql = (
-            "SELECT id, user_id, status, username, first_name, last_name, display_choice, nickname, inserido_em"
-            " FROM usuario_history"
-            " WHERE user_id = $1"
-            " ORDER BY inserido_em DESC, id DESC"
-            " LIMIT $2 OFFSET $3"
+            "SELECT id, user_id, status, username, first_name, last_name, "
+            "display_choice, nickname, inserido_em "
+            "FROM usuario_history "
+            "WHERE user_id = $1 "
+            "ORDER BY inserido_em DESC, id DESC "
+            "LIMIT $2 OFFSET $3"
         )
         params = (target_id, PAGE_SIZE + 1, offset)
         header = (
-            f"🕒 Histórico de alterações para `{target_id}` "
-            f"(página {page}, {PAGE_SIZE} por página):"
+            "🕒 <b>Histórico de alterações para "
+            f"{html.escape(str(target_id))} "
+            f"(página {page}, {PAGE_SIZE} por página):</b>"
         )
 
-    # 5) Execução e slice (igual ao seu)
+    # 5) Busca no banco
     rows = await pool.fetch(sql, *params)
     tem_mais = len(rows) > PAGE_SIZE
     rows = rows[:PAGE_SIZE]
 
-    # 6) Sem registros
+    # 6) Sem resultados
     if not rows:
-        alvo = f" para `{target_id}`" if target_id else ""
+        alvo = f" para {html.escape(str(target_id))}" if target_id else ""
         await update.message.reply_text(
-            f"ℹ️ Sem histórico{alvo} na página {page} ", parse_mode="MarkdownV2"
+            f"ℹ️ Sem histórico{alvo} na página {page}.",
+            parse_mode=ParseMode.HTML
         )
         return
 
-    # 7) Monta linhas
-    lines = [escape_markdown_v2(header)]
+    # 7) Monta as linhas em HTML
+    lines = [header]
     for r in rows:
-        ts_str = r["inserido_em"].strftime("%d/%m %H:%M")
-        prefix = r["status"]  # 'Inserido' ou 'Atualizado'
-        user_part = f"`{escape_md2_code(str(r['user_id']))}` " if target_id is None else ""
+        ts = html.escape(r["inserido_em"].strftime("%d/%m %H:%M"))
+        status = html.escape(r["status"])
+        uid = html.escape(str(r["user_id"]))
+        username = html.escape(r["username"])
+        firstname = html.escape(r["first_name"])
+        lastname = html.escape(r["last_name"])
+        display_choice = html.escape(str(r["display_choice"]))
+        nickname = html.escape(r["nickname"])
+
         lines.append(
-            f"{escape_markdown_v2(ts_str)} — {user_part}*{escape_markdown_v2(prefix)}*: "
-            f"username: `{escape_md2_code(r['username'])}` "
-            f"firstname: `{escape_md2_code(r['first_name'])}` "
-            f"lastname: `{escape_md2_code(r['last_name'])}` "
-            f"display_choice: `{escape_md2_code(str(r['display_choice']))}` "
-            f"nickname: `{escape_md2_code(r['nickname'])}` \n"
+            f"{ts} — <i>{status}</i> — "
+            f"<code>{uid}</code> — "
+            f"username: <code>{username}</code> — "
+            f"first_name: <code>{firstname}</code> — "
+            f"last_name: <code>{lastname}</code> — "
+            f"display_choice: <code>{display_choice}</code> — "
+            f"nickname: <code>{nickname}</code>"
         )
 
-    texto = "\n".join(lines)
-    if len(texto) > MAX_MESSAGE_LENGTH:
-        texto = texto[: MAX_MESSAGE_LENGTH - 50] + "\n\n⚠️ Texto truncado..."
+    texto_html = "\n".join(lines)
+    if len(texto_html) > MAX_MESSAGE_LENGTH:
+        texto_html = texto_html[: MAX_MESSAGE_LENGTH - 50] + "\n\n⚠️ Texto truncado..."
 
     # 8) Botões de navegação
     botoes = []
     if page > 1:
-        botoes.append(
-            InlineKeyboardButton(
-                "◀️ Anterior",
-                callback_data=f"hist:{target_id or 0}:{page - 1}"
-            )
-        )
+        botoes.append(InlineKeyboardButton("◀️ Anterior", callback_data=f"hist:{target_id or 0}:{page-1}"))
     if tem_mais:
-        botoes.append(
-            InlineKeyboardButton(
-                "Próximo ▶️",
-                callback_data=f"hist:{target_id or 0}:{page + 1}"
-            )
-        )
+        botoes.append(InlineKeyboardButton("Próximo ▶️", callback_data=f"hist:{target_id or 0}:{page+1}"))
     markup = InlineKeyboardMarkup([botoes]) if botoes else None
-    print(texto)
-    # 9) Envia a resposta
+
+    # 9) Envia a resposta em HTML
     await update.message.reply_text(
-        texto,
-        parse_mode="MarkdownV2",
+        texto_html,
+        parse_mode=ParseMode.HTML,
         reply_markup=markup
     )
-
 
     # 10) Log de auditoria
     logger.info(
@@ -939,7 +944,6 @@ async def historico_usuario(update: Update, context: CallbackContext):
         target_id or 'global',
         page
     )
-
 
 async def callback_historico(update: Update, context: CallbackContext):
     query = update.callback_query
