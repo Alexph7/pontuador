@@ -815,11 +815,13 @@ async def historico_usuario(update: Update, context: CallbackContext):
         "*Formas de uso:*\n"
         "`/historico\\_usuario` – Mostra todo os usuários sem filtro\n"
         "`/historico\\_usuario <user_id>` – Mostra o histórico de um usuário\n"
-        "`/historico\\_usuario <user_id> <página>` – Mostra o histórico de um usuário em pagina desejada\n\n"
+        "`/historico\\_usuario <user_id> <página>` – Mostra o histórico de um usuário em pagina desejada\n"
+        "`/historico\\_usuario <nickname> <página>` – Mostra o histórico de um usuário pelo nickname e página\n\n"
         "*Exemplos:*\n"
         "`/historico\\_usuario`\n"
         "`/historico\\_usuario 123456789`\n"
-        "`/historico\\_usuario 123456789 2`\n\n"
+        "`/historico\\_usuario 123456789 2`\n"
+        "`/historico\\_usuario joaosilva 2`\n\n"
         f"*ℹ️ Cada página exibe até {PAGE_SIZE} registros*"
     )
 
@@ -832,6 +834,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
 
     # 3) Parsing de arguments: target_id e page
     target_id = None
+    nickname = None
     page = 1
     if len(args) == 1 and args[0].isdigit() and is_callback:
         page = int(args[0])
@@ -839,6 +842,11 @@ async def historico_usuario(update: Update, context: CallbackContext):
         target_id = int(args[0])
     elif len(args) == 2 and args[0].isdigit() and args[1].isdigit():
         target_id, page = int(args[0]), int(args[1])
+    elif len(args) == 1:
+        nickname = args[0]
+    elif len(args) == 2 and args[1].isdigit():
+        nickname = args[0]
+        page = int(args[1])
     elif args:
         await update.message.reply_text(
             "Uso incorreto. Digite `/historico_usuario ajuda`",
@@ -847,6 +855,21 @@ async def historico_usuario(update: Update, context: CallbackContext):
         return ConversationHandler.END
 
     offset = (page - 1) * PAGE_SIZE
+    if nickname:
+        sql_nick = (
+            "SELECT user_id FROM usuario_history "
+            "WHERE nickname = $1 "
+            "ORDER BY inserido_em DESC LIMIT 1"
+        )
+        row = await pool.fetchrow(sql_nick, nickname)
+        if row:
+            target_id = row["user_id"]
+        else:
+            await update.message.reply_text(
+                f"⚠️ Nickname `{escape_markdown_v2(nickname)}` não encontrado no histórico",
+                parse_mode="MarkdownV2"
+            )
+            return ConversationHandler.END
 
     # 4) Executa a query (sem definir header aqui)
     if target_id is None:
@@ -879,6 +902,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
                 parse_mode="MarkdownV2"
             )
         else:
+            alvo = nickname or str(target_id)
             alvo_esc = escape_markdown_v2(str(target_id))
             await update.message.reply_text(
                 f"ℹ️ Sem histórico para `{alvo_esc}` na página {page}.",
