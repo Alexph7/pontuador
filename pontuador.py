@@ -895,8 +895,8 @@ async def historico_usuario(update: Update, context: CallbackContext):
             f"{ts_str} — {user_part}*{prefix}*: "
             f"username: `{escape_markdown_v2(r['username'])}` "
             f"firstname: `{escape_markdown_v2(r['first_name'])}` "
-            f"lastname: `{escape_markdown_v2(r['last_name'])}`"
-            f"display_choice: `{escape_markdown_v2(r['display_choice'])}`"
+            f"lastname: `{escape_markdown_v2(r['last_name'])}` "
+            f"display_choice: `{escape_markdown_v2(r['display_choice'])}` "
             f"nickname: `{escape_markdown_v2(r['nickname'])}`"
         )
 
