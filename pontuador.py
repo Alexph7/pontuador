@@ -84,15 +84,15 @@ async def init_db_pool():
         # Criação de tabelas se não existirem
         await conn.execute("""
        CREATE TABLE IF NOT EXISTS usuarios (
-          user_id            BIGINT PRIMARY KEY,
-          username           TEXT NOT NULL DEFAULT 'vazio',
-          first_name         TEXT NOT NULL DEFAULT 'vazio',
-          last_name          TEXT NOT NULL DEFAULT 'vazio',
-          pontos             INTEGER NOT NULL DEFAULT 0,
-          nivel_atingido     INTEGER NOT NULL DEFAULT 0,
-          is_pontuador       BOOLEAN NOT NULL DEFAULT FALSE,
-          ultima_interacao   DATE,                                -- só para pontuar 1x/dia
-          inserido_em        TIMESTAMP NOT NULL DEFAULT NOW(),    -- quando o usuário foi inserido
+            user_id            BIGINT PRIMARY KEY,
+            username           TEXT NOT NULL DEFAULT 'vazio',
+            first_name         TEXT NOT NULL DEFAULT 'vazio',
+            last_name          TEXT NOT NULL DEFAULT 'vazio',
+            pontos             INTEGER NOT NULL DEFAULT 0,
+            nivel_atingido     INTEGER NOT NULL DEFAULT 0,
+            is_pontuador       BOOLEAN NOT NULL DEFAULT FALSE,
+            ultima_interacao   DATE,                                -- só para pontuar 1x/dia
+            inserido_em        TIMESTAMP NOT NULL DEFAULT NOW(),    -- quando o usuário foi inserido
             atualizado_em      TIMESTAMP NOT NULL DEFAULT NOW(),     -- quando qualquer coluna for atualizada
             display_choice     VARCHAR(20) NOT NULL DEFAULT 'indefinido',
             nickname           VARCHAR(50) NOT NULL DEFAULT 'sem nick'
@@ -135,9 +135,8 @@ async def init_db_pool():
     ADMINS = await carregar_admins_db()
 
 # --- Helpers de usuário (asyncpg) ---
-PAGE_SIZE = 22
+PAGE_SIZE = 17
 MAX_MESSAGE_LENGTH = 4000
-HISTORICO_USER_ID = 4
 
 
 async def adicionar_usuario_db(
