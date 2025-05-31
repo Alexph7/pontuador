@@ -32,7 +32,6 @@ from telegram.ext import (
 def hoje_sp():
     return datetime.now(tz=ZoneInfo("America/Sao_Paulo")).date()
 
-
 pool: asyncpg.Pool | None = None
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -75,24 +74,25 @@ NIVEIS_BRINDES = {
 
 hoje = hoje_sp()
 
-TEMPO_LIMITE_BUSCA = 10  # Tempo máximo (em segundos) para consulta
+TEMPO_LIMITE_BUSCA = 10          # Tempo máximo (em segundos) para consulta
+
 
 async def init_db_pool():
     global pool, ADMINS
-    pool = await asyncpg.create_pool(dsn=DATABASE_URL, min_size=1, max_size=10)
+    pool = await asyncpg.create_pool(dsn=DATABASE_URL,min_size=1,max_size=10)
     async with pool.acquire() as conn:
         # Criação de tabelas se não existirem
         await conn.execute("""
-        CREATE TABLE IF NOT EXISTS usuarios (
-            user_id            BIGINT PRIMARY KEY,
-            username           TEXT NOT NULL DEFAULT 'vazio',
-            first_name         TEXT NOT NULL DEFAULT 'vazio',
-            last_name          TEXT NOT NULL DEFAULT 'vazio',
-            pontos             INTEGER NOT NULL DEFAULT 0,
-            nivel_atingido     INTEGER NOT NULL DEFAULT 0,
-            is_pontuador       BOOLEAN NOT NULL DEFAULT FALSE,
-            ultima_interacao   DATE,                                -- só para pontuar 1x/dia
-            inserido_em        TIMESTAMP NOT NULL DEFAULT NOW(),    -- quando o usuário foi inserido
+       CREATE TABLE IF NOT EXISTS usuarios (
+          user_id            BIGINT PRIMARY KEY,
+          username           TEXT NOT NULL DEFAULT 'vazio',
+          first_name         TEXT NOT NULL DEFAULT 'vazio',
+          last_name          TEXT NOT NULL DEFAULT 'vazio',
+          pontos             INTEGER NOT NULL DEFAULT 0,
+          nivel_atingido     INTEGER NOT NULL DEFAULT 0,
+          is_pontuador       BOOLEAN NOT NULL DEFAULT FALSE,
+          ultima_interacao   DATE,                                -- só para pontuar 1x/dia
+          inserido_em        TIMESTAMP NOT NULL DEFAULT NOW(),    -- quando o usuário foi inserido
             atualizado_em      TIMESTAMP NOT NULL DEFAULT NOW(),     -- quando qualquer coluna for atualizada
             display_choice     VARCHAR(20) NOT NULL DEFAULT 'indefinido',
             nickname           VARCHAR(50) NOT NULL DEFAULT 'sem nick'
@@ -141,13 +141,13 @@ HISTORICO_USER_ID = 4
 
 
 async def adicionar_usuario_db(
-        user_id: int,
-        username: str = "vazio",
-        first_name: str = "vazio",
-        last_name: str = "vazio",
+    user_id: int,
+    username: str = "vazio",
+    first_name: str = "vazio",
+    last_name: str = "vazio",
         display_choice: str = "indefinido",
         nickname: str = "sem nick",
-        pool_override: asyncpg.Pool | None = None,
+    pool_override: asyncpg.Pool | None = None,
 ):
     pg = pool_override or pool
     async with pg.acquire() as conn:
@@ -173,7 +173,7 @@ async def adicionar_usuario_db(
                 if mudou_username or mudou_firstname or mudou_lastname or mudou_display_choice or mudou_nickname:
                     logger.info(
                         f"[DB] {user_id} Atualizado: username: {username} "
-                        f"firstname: {first_name} lastname: {last_name} "
+                        f"firstname: {first_name} lastname: {last_name}"
                         f"displaychoice: {display_choice} nickname: {nickname}"
                     )
                     await conn.execute(
@@ -220,7 +220,7 @@ async def adicionar_usuario_db(
             else:
                 logger.info(
                     f"[DB] {user_id} Inserido: username: {username} "
-                    f"firstname: {first_name} lastname: {last_name} "
+                    f"firstname: {first_name} lastname: {last_name}"
                     f"display_choice: {display_choice} nickname: {nickname}"
                 )
                 await conn.execute(
@@ -260,7 +260,7 @@ async def obter_ou_criar_usuario_db(user_id: int, username: str, first_name: str
             "INSERT INTO usuarios (user_id, username, first_name, last_name, display_choice, nickname) "
             "VALUES ($1, $2, $3, $4, $5, $6)",
             user_id, username or "vazio", first_name or "vazio", last_name or "vazio", "indefinido", "sem nick"
-        )
+    )
         perfil = await pool.fetchrow("SELECT * FROM usuarios WHERE user_id = $1", user_id)
     return perfil
 
@@ -278,17 +278,12 @@ async def registrar_historico_db(user_id: int, pontos: int, motivo: str | None =
     )
 
 
-def escape_markdown_v2(text: str | None) -> str:
-    if text is None:
-        text = ''
-    return re.sub(r'([_*\[\]()~`>#+\-=|{}.!\\])', r'\\\1', str(text))
-
-def escape_md2_code(text: str | None) -> str:
-    if text is None:
-        text = ''
-    return str(text).replace('\\', '\\\\').replace('`', '\\`')
-
-
+def escape_markdown_v2(text: str) -> str:
+    """
+    Escapa caracteres reservados do MarkdownV2.
+    """
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
 # Mensagem de Mural de Entrada
 async def setup_bot_description(app):
@@ -431,7 +426,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🤖 Bem-vindo, {user.first_name}! Para começar, caso você alcance o Ranking, como você gostaria de aparecer?",
         reply_markup=keyboard
-    )
+            )
     return ESCOLHENDO_DISPLAY
 
 
@@ -536,10 +531,10 @@ async def meus_pontos(update: Update, context: CallbackContext):
 
     except Exception as e:
         logger.error(f"Erro ao buscar pontos do usuário {user.id}: {e}", exc_info=True)
-        await update.message.reply_text(
+    await update.message.reply_text(
             "❌ Desculpe, tivemos um problema ao acessar as suas informações. "
             "Tente novamente mais tarde. Se o problema persistir contate o suporte."
-        )
+    )
 
 async def como_ganhar(update: Update, context: CallbackContext):
     # Ordena os brindes por nível de pontos
@@ -689,7 +684,7 @@ async def historico(update: Update, context: CallbackContext):
         await update.message.reply_text("🗒️ Nenhum registro de histórico encontrado.")
         return
     lines = [
-        f"📅 {r['data'].strftime('%d/%m %H:%M')}: {r['pontos']} pts - {r['motivo']}"
+        f" {r['data'].strftime('%d/%m %H:%M')}: {r['pontos']} pts - {r['motivo']}"
         for r in rows
     ]
     await update.message.reply_text("🗒️ Seu histórico de pontos:\n\n" + "\n\n".join(lines))
@@ -797,12 +792,13 @@ async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-import html
-from telegram.constants import ParseMode
+# No topo do módulo, defina um separador para os logs agregados:
+DELIM = '|'  # caractere que não aparece em usernames/nomes
 
 async def historico_usuario(update: Update, context: CallbackContext):
     # 0) Autenticação de admin
     requester_id = update.effective_user.id
+
     if requester_id not in ADMINS:
         await update.message.reply_text("🔒 Você precisa autenticar: use /admin primeiro.")
         return ConversationHandler.END
@@ -814,30 +810,28 @@ async def historico_usuario(update: Update, context: CallbackContext):
             "ℹ️ Se precisar de ajuda, digite /historico_usuario ajuda"
         )
 
-    # 2) Ajuda
-    AJUDA_HISTORICO_HTML = html.escape(
-        "📘 Ajuda: /historico_usuario\n\n"
+    # 2) Texto de ajuda (exibido só em `/ajuda`)
+    AJUDA_HISTORICO = (
+        "*📘 Ajuda: /historico_usuario*\n\n"
         "Este comando retorna o histórico de alterações dos usuários.\n\n"
-        "Formas de uso:\n"
-        "/historico_usuario – Mostra todos os usuários.\n"
-        "/historico_usuario <user_id> – Hist. de um usuário.\n"
-        "/historico_usuario <user_id> <página> – Página desejada.\n\n"
-        "Exemplos:\n"
-        "/historico_usuario\n"
-        "/historico_usuario 123456789\n"
-        "/historico_usuario 123456789 2\n\n"
-        f"ℹ️ Cada página exibe até {PAGE_SIZE} registros."
+        "*Formas de uso:*\n"
+        "`/historico_usuario` – Mostra os usuários sem filtro.\n"
+        "`/historico_usuario <user_id>` – Mostra o histórico de um usuário.\n"
+        "`/historico_usuario <user_id> <página>` – Página desejada.\n\n"
+        "*Exemplos:*\n"
+        "`/historico_usuario`\n"
+        "`/historico_usuario 123456789`\n"
+        "`/historico_usuario 123456789 2`\n\n"
+        f"*ℹ️ Cada página exibe até {PAGE_SIZE} registros.*"
     )
-    if context.args and len(context.args) == 1 and context.args[0].lower() == "ajuda":
-        # envolve em <pre> para preservar quebras de linha na ajuda
+    args = context.args or []
+    if len(args) == 1 and args[0].lower() == "ajuda":
         await update.message.reply_text(
-            f"<pre>{AJUDA_HISTORICO_HTML}</pre>",
-            parse_mode=ParseMode.HTML
+            AJUDA_HISTORICO, parse_mode="MarkdownV2"
         )
         return ConversationHandler.END
 
-    # 3) Parsing de argumentos
-    args = context.args or []
+    # 3) Parsing de arguments: target_id e page
     target_id = None
     page = 1
     if len(args) == 1 and args[0].isdigit() and is_callback:
@@ -848,92 +842,90 @@ async def historico_usuario(update: Update, context: CallbackContext):
         target_id, page = int(args[0]), int(args[1])
     elif args:
         await update.message.reply_text(
-            "Uso incorreto. Digite /historico_usuario ajuda",
-            parse_mode=ParseMode.HTML
+            "Uso incorreto. Digite `/historico_usuario ajuda`",
+            parse_mode="MarkdownV2"
         )
         return ConversationHandler.END
 
     offset = (page - 1) * PAGE_SIZE
 
-    # 4) Monta SQL e cabeçalho
     if target_id is None:
         sql = (
-            "SELECT id, user_id, status, username, first_name, last_name, "
-            "display_choice, nickname, inserido_em "
-            "FROM usuario_history "
-            "ORDER BY inserido_em DESC, id DESC "
-            "LIMIT $1 OFFSET $2"
+            "SELECT id, user_id, status, username, first_name, last_name, display_choice, nickname, inserido_em"
+            " FROM usuario_history"
+            " ORDER BY inserido_em DESC, id DESC"
+            " LIMIT $1 OFFSET $2"
         )
         params = (PAGE_SIZE + 1, offset)
-        header = f"🕒 <b>Histórico completo (todos os usuários, página {page}):</b>"
+        header = f"🕒 Histórico completo (todos os usuários, página {page}):\n"
     else:
         sql = (
-            "SELECT id, user_id, status, username, first_name, last_name, "
-            "display_choice, nickname, inserido_em "
-            "FROM usuario_history "
-            "WHERE user_id = $1 "
-            "ORDER BY inserido_em DESC, id DESC "
-            "LIMIT $2 OFFSET $3"
+            "SELECT id, user_id, status, username, first_name, last_name, display_choice, nickname, inserido_em"
+            " FROM usuario_history"
+            " WHERE user_id = $1"
+            " ORDER BY inserido_em DESC, id DESC"
+            " LIMIT $2 OFFSET $3"
         )
         params = (target_id, PAGE_SIZE + 1, offset)
         header = (
-            "🕒 <b>Histórico de alterações para "
-            f"{html.escape(str(target_id))} "
-            f"(página {page}, {PAGE_SIZE} por página):</b>"
+            f"🕒 Histórico de alterações para `{target_id}` "
+            f"(página {page}, {PAGE_SIZE} por página):"
         )
 
-    # 5) Busca no banco
+    # 5) Execução e slice (igual ao seu)
     rows = await pool.fetch(sql, *params)
     tem_mais = len(rows) > PAGE_SIZE
     rows = rows[:PAGE_SIZE]
 
-    # 6) Sem resultados
+    # 6) Sem registros
     if not rows:
-        alvo = f" para {html.escape(str(target_id))}" if target_id else ""
+        alvo = f" para `{target_id}`" if target_id else ""
         await update.message.reply_text(
-            f"ℹ️ Sem histórico{alvo} na página {page}.",
-            parse_mode=ParseMode.HTML
+            f"ℹ️ Sem histórico{alvo} na página {page}."
         )
         return
 
-    # 7) Monta as linhas em HTML
-    lines = [header]
+    # 7) Monta linhas
+    lines = [escape_markdown_v2(header)]
     for r in rows:
-        ts = html.escape(r["inserido_em"].strftime("%d/%m %H:%M"))
-        status = html.escape(r["status"])
-        uid = html.escape(str(r["user_id"]))
-        username = html.escape(r["username"])
-        firstname = html.escape(r["first_name"])
-        lastname = html.escape(r["last_name"])
-        display_choice = html.escape(str(r["display_choice"]))
-        nickname = html.escape(r["nickname"])
-
+        ts_str = r["inserido_em"].strftime("%d/%m %H:%M")
+        prefix = r["status"]  # 'Inserido' ou 'Atualizado'
+        user_part = f"`{r['user_id']}` " if target_id is None else ""
         lines.append(
-            f"{ts} — <i>{status}</i> — "
-            f"<code>{uid}</code> — "
-            f"username: <code>{username}</code> — "
-            f"first_name: <code>{firstname}</code> — "
-            f"last_name: <code>{lastname}</code> — "
-            f"display_choice: <code>{display_choice}</code> — "
-            f"nickname: <code>{nickname}</code>"
+            f"{ts_str} — {user_part}*{prefix}*: "
+            f"username: `{escape_markdown_v2(r['username'])}` "
+            f"firstname: `{escape_markdown_v2(r['first_name'])}` "
+            f"lastname: `{escape_markdown_v2(r['last_name'])}`"
+            f"display_choice: `{escape_markdown_v2(r['display_choice'])}`"
+            f"nickname: `{escape_markdown_v2(r['nickname'])}`"
         )
 
-    texto_html = "\n".join(lines)
-    if len(texto_html) > MAX_MESSAGE_LENGTH:
-        texto_html = texto_html[: MAX_MESSAGE_LENGTH - 50] + "\n\n⚠️ Texto truncado..."
+    texto = "\n".join(lines)
+    if len(texto) > MAX_MESSAGE_LENGTH:
+        texto = texto[: MAX_MESSAGE_LENGTH - 50] + "\n\n⚠️ Texto truncado..."
 
     # 8) Botões de navegação
     botoes = []
     if page > 1:
-        botoes.append(InlineKeyboardButton("◀️ Anterior", callback_data=f"hist:{target_id or 0}:{page-1}"))
+        botoes.append(
+            InlineKeyboardButton(
+                "◀️ Anterior",
+                callback_data=f"hist:{target_id or 0}:{page-1}"
+            )
+        )
     if tem_mais:
-        botoes.append(InlineKeyboardButton("Próximo ▶️", callback_data=f"hist:{target_id or 0}:{page+1}"))
+        botoes.append(
+            InlineKeyboardButton(
+                "Próximo ▶️",
+                callback_data=f"hist:{target_id or 0}:{page+1}"
+            )
+        )
     markup = InlineKeyboardMarkup([botoes]) if botoes else None
 
-    # 9) Envia a resposta em HTML
+    # 9) Envia a resposta
     await update.message.reply_text(
-        texto_html,
-        parse_mode=ParseMode.HTML,
+        texto,
+        parse_mode="MarkdownV2",
         reply_markup=markup
     )
 
@@ -1061,9 +1053,9 @@ async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Inline keyboard para navegar páginas
     buttons = []
     if page > 1:
-        buttons.append(InlineKeyboardButton('◀️ Anterior', callback_data=f"usuarios|{page - 1}|{' '.join(args)}"))
+        buttons.append(InlineKeyboardButton('◀️ Anterior', callback_data=f"usuarios|{page-1}|{' '.join(args)}"))
     if page < total_pages:
-        buttons.append(InlineKeyboardButton('Próxima ▶️', callback_data=f"usuarios|{page + 1}|{' '.join(args)}"))
+        buttons.append(InlineKeyboardButton('Próxima ▶️', callback_data=f"usuarios|{page+1}|{' '.join(args)}"))
     keyboard = InlineKeyboardMarkup([buttons]) if buttons else None
 
     await update.message.reply_text(text, parse_mode='MarkdownV2', reply_markup=keyboard)
@@ -1095,7 +1087,7 @@ main_conv = ConversationHandler(
         CommandHandler("admin", admin, filters=filters.ChatType.PRIVATE),
         CommandHandler("add_pontos", add_pontos),
         # CommandHandler("del_pontos", del_pontos),
-        #CommandHandler("add_admin", add_admin),
+        # CommandHandler("add_admin", add_admin),
         # CommandHandler("rem_admin", rem_admin),
     ],
     states={
@@ -1151,6 +1143,7 @@ main_conv = ConversationHandler(
 async def main():
     global ADMINS
 
+    # 1) inicializa o pool ANTES de criar o Application
     await init_db_pool()
     ADMINS = await carregar_admins_db()
 
