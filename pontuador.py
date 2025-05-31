@@ -810,12 +810,12 @@ async def historico_usuario(update: Update, context: CallbackContext):
         )
 
     AJUDA_HISTORICO = (
-        "*📘 Ajuda: /historico\\_usuario*\n\n"
+        "*📘 Ajuda com parâmetros*\n\n"
         "Este comando retorna o histórico de alterações dos usuários\n\n"
         "*Formas de uso:*\n"
-        "`/historico\\_usuario` – Mostra os usuários sem filtro\n"
+        "`/historico\\_usuario` – Mostra todo os usuários sem filtro\n"
         "`/historico\\_usuario <user_id>` – Mostra o histórico de um usuário\n"
-        "`/historico\\_usuario <user_id> <página>` – Página desejada\n\n"
+        "`/historico\\_usuario <user_id> <página>` – Mostra o histórico de um usuário em pagina desejada\n\n"
         "*Exemplos:*\n"
         "`/historico\\_usuario`\n"
         "`/historico\\_usuario 123456789`\n"
