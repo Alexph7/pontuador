@@ -805,7 +805,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
     is_callback = getattr(update, "callback_query", None) is not None
     if not is_callback:
         await update.message.reply_text(
-            "ℹ️ Se precisar de ajuda, digite /historico_usuario ajuda"
+            "ℹ️ Precisar de ajuda, digite /historico_usuario + ajuda"
         )
 
     # 2) Texto de ajuda (exibido só em `/ajuda`)
