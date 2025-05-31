@@ -135,7 +135,7 @@ async def init_db_pool():
     ADMINS = await carregar_admins_db()
 
 # --- Helpers de usuário (asyncpg) ---
-PAGE_SIZE = 20
+PAGE_SIZE = 16
 MAX_MESSAGE_LENGTH = 4000
 
 async def adicionar_usuario_db(
@@ -674,7 +674,7 @@ async def historico(update: Update, context: CallbackContext):
           FROM historico_pontos
          WHERE user_id = $1
       ORDER BY data DESC
-         LIMIT 60
+         LIMIT 50
         """,
         user.id
     )
@@ -916,7 +916,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
     for line in lines:
         # +1 para contabilizar o '\n' que será inserido
         if total_length + len(line) + 1 > MAX_MESSAGE_LENGTH - 50:
-            final_lines.append("⚠️ Atenção: parte da mensagem foi omitida por exceder o limite.")
+            final_lines.append("⚠️ Atenção: parte da mensagem omitida por exceder o limite.")
             break
         final_lines.append(line)
         total_length += len(line) + 1
