@@ -9,7 +9,6 @@ from operator import attrgetter  # ou itemgetter
 from time import perf_counter
 from asyncpg import UniqueViolationError, PostgresError, CannotConnectNowError, ConnectionDoesNotExistError
 import asyncio
-import csv
 import io
 import math
 import datetime
@@ -18,6 +17,7 @@ from datetime import datetime, date
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram import Update, Bot
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler
 from typing import Dict, Any
 from dotenv import load_dotenv
@@ -137,7 +137,6 @@ async def init_db_pool():
 # --- Helpers de usuário (asyncpg) ---
 PAGE_SIZE = 17
 MAX_MESSAGE_LENGTH = 4000
-
 
 async def adicionar_usuario_db(
     user_id: int,
@@ -848,44 +847,55 @@ async def historico_usuario(update: Update, context: CallbackContext):
 
     offset = (page - 1) * PAGE_SIZE
 
+    # 4) Executa a query (sem definir header aqui)
     if target_id is None:
         sql = (
-            "SELECT id, user_id, status, username, first_name, last_name, display_choice, nickname, inserido_em"
-            " FROM usuario_history"
-            " ORDER BY inserido_em DESC, id DESC"
-            " LIMIT $1 OFFSET $2"
+            "SELECT id, user_id, status, username, first_name, last_name, display_choice, nickname, inserido_em "
+            "FROM usuario_history "
+            "ORDER BY inserido_em DESC, id DESC "
+            "LIMIT $1 OFFSET $2"
         )
         params = (PAGE_SIZE + 1, offset)
-        header = f"🕒 Histórico completo (todos os usuários, página {page}):\n"
     else:
         sql = (
-            "SELECT id, user_id, status, username, first_name, last_name, display_choice, nickname, inserido_em"
-            " FROM usuario_history"
-            " WHERE user_id = $1"
-            " ORDER BY inserido_em DESC, id DESC"
-            " LIMIT $2 OFFSET $3"
+            "SELECT id, user_id, status, username, first_name, last_name, display_choice, nickname, inserido_em "
+            "FROM usuario_history "
+            "WHERE user_id = $1 "
+            "ORDER BY inserido_em DESC, id DESC "
+            "LIMIT $2 OFFSET $3"
         )
         params = (target_id, PAGE_SIZE + 1, offset)
-        header = (
-            f"🕒 Histórico de alterações para `{target_id}` "
-            f"(página {page}, {PAGE_SIZE} por página):"
-        )
 
-    # 5) Execução e slice (igual ao seu)
     rows = await pool.fetch(sql, *params)
     tem_mais = len(rows) > PAGE_SIZE
     rows = rows[:PAGE_SIZE]
 
-    # 6) Sem registros
+    # 5) Se não há registros
     if not rows:
-        alvo = f" para `{target_id}`" if target_id else ""
-        await update.message.reply_text(
-            f"ℹ️ Sem histórico{alvo} na página {page}."
-        )
+        if target_id is None:
+            await update.message.reply_text(
+                f"ℹ️ Sem histórico na página {page}.",
+                parse_mode="MarkdownV2"
+            )
+        else:
+            alvo_esc = escape_markdown_v2(str(target_id))
+            await update.message.reply_text(
+                f"ℹ️ Sem histórico para `{alvo_esc}` na página {page}.",
+                parse_mode="MarkdownV2"
+            )
         return
 
-    # 7) Monta linhas
-    lines = [escape_markdown_v2(header)]
+    # 6) Monta o header definitivo apenas aqui (sem duplicação)
+    if target_id is None:
+        header = f"🕒 Histórico completo \\(todos os usuários, página {page}\\):"
+    else:
+        user_id_escapado = escape_markdown_v2(str(target_id))
+        header = (
+            f"🕒 Histórico de alterações para `{user_id_escapado}` "
+            f"\\(página {page}, {PAGE_SIZE} por página\\):"
+        )
+
+    lines = [header]
     for r in rows:
         ts_str = r["inserido_em"].strftime("%d/%m %H:%M")
         prefix = r["status"]  # 'Inserido' ou 'Atualizado'
@@ -895,15 +905,25 @@ async def historico_usuario(update: Update, context: CallbackContext):
             f"username: `{escape_markdown_v2(r['username'])}` "
             f"firstname: `{escape_markdown_v2(r['first_name'])}` "
             f"lastname: `{escape_markdown_v2(r['last_name'])}` "
-            f"display_choice: `{escape_markdown_v2(r['display_choice'])}` "
+            f"displaychoice: `{escape_markdown_v2(r['display_choice'])}` "
             f"nickname: `{escape_markdown_v2(r['nickname'])}`"
         )
 
-    texto = "\n".join(lines)
-    if len(texto) > MAX_MESSAGE_LENGTH:
-        texto = texto[: MAX_MESSAGE_LENGTH - 50] + "\n\n⚠️ Texto truncado..."
+    # 8) Truncamento linha a linha (nunca cortando no meio de uma formatação)
+    final_lines = []
+    total_length = 0
 
-    # 8) Botões de navegação
+    for line in lines:
+        # +1 para contabilizar o '\n' que será inserido
+        if total_length + len(line) + 1 > MAX_MESSAGE_LENGTH - 50:
+            final_lines.append("⚠️ Atenção: parte da mensagem foi omitida por exceder o limite.")
+            break
+        final_lines.append(line)
+        total_length += len(line) + 1
+
+    texto = "\n".join(final_lines)
+
+    # 9) Botões de navegação
     botoes = []
     if page > 1:
         botoes.append(
@@ -920,15 +940,51 @@ async def historico_usuario(update: Update, context: CallbackContext):
             )
         )
     markup = InlineKeyboardMarkup([botoes]) if botoes else None
+    try:
+        await update.message.reply_text(
+            texto,
+            parse_mode="MarkdownV2",
+            reply_markup=markup
+        )
+    except BadRequest as err:
+        # 1) Extrair o “byte offset” da mensagem de erro
+        #    Normalmente a mensagem do err tem algo como:
+        #    "Can't parse entities: can't find end of italic entity at byte offset 2529"
+        msg = str(err)
+        match = re.search(r'byte offset (\d+)', msg)
+        if match:
+            offset = int(match.group(1))
+        else:
+            offset = None
 
-    # 9) Envia a resposta
-    await update.message.reply_text(
-        texto,
-        parse_mode="MarkdownV2",
-        reply_markup=markup
-    )
+        # 2) Se achamos o offset, imprimimos um trecho antes e depois dele
+        if offset is not None:
+            start = max(0, offset - 100)
+            end = min(len(texto), offset + 100)
+            trecho_com_erro = texto[start:end]
 
-    # 10) Log de auditoria
+            # Imprime no console/log para você ver exatamente onde está o problema
+            logger.error("MarkdownV2 inválido em byte offset %d", offset)
+            logger.error("Trecho ao redor do offset:\n>>> %r <<<", trecho_com_erro)
+
+            # Se quiser também mandar para o próprio chat (apenas para DEBUG):
+            await update.message.reply_text(
+                f"⚠️ Erro de formatação em byte offset {offset}.\n"
+                f"Trecho com problema:\n<pre>{trecho_com_erro}</pre>",
+                parse_mode="HTML"
+            )
+        else:
+            # Se não encontramos o offset, mostramos a mensagem inteira de erro:
+            logger.error("BadRequest sem offset detectado: %s", msg)
+            await update.message.reply_text(
+                f"⚠️ Erro inesperado de MarkdownV2:\n<pre>{msg}</pre>",
+                parse_mode="HTML"
+            )
+
+        # Opcional: re-raise para interromper (ou só sair do handler)
+        return
+
+    # 11) Log de auditoria
     logger.info(
         "Admin %s consultou histórico %s (page %d)",
         requester_id,
