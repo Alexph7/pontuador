@@ -805,23 +805,24 @@ async def historico_usuario(update: Update, context: CallbackContext):
     is_callback = getattr(update, "callback_query", None) is not None
     if not is_callback:
         await update.message.reply_text(
-            "ℹ️ Precisar de ajuda, digite /historico_usuario + ajuda"
+            "ℹ️ Precisar de ajuda, digite `/historico_usuario ajuda`",
+            parse_mode = "MarkdownV2"
         )
 
-    # 2) Texto de ajuda (exibido só em `/ajuda`)
     AJUDA_HISTORICO = (
-        "*📘 Ajuda: /historico_usuario*\n\n"
-        "Este comando retorna o histórico de alterações dos usuários.\n\n"
+        "*📘 Ajuda: /historico\\_usuario*\n\n"
+        "Este comando retorna o histórico de alterações dos usuários\n\n"
         "*Formas de uso:*\n"
-        "`/historico_usuario` – Mostra os usuários sem filtro.\n"
-        "`/historico_usuario <user_id>` – Mostra o histórico de um usuário.\n"
-        "`/historico_usuario <user_id> <página>` – Página desejada.\n\n"
+        "`/historico\\_usuario` – Mostra os usuários sem filtro\n"
+        "`/historico\\_usuario <user_id>` – Mostra o histórico de um usuário\n"
+        "`/historico\\_usuario <user_id> <página>` – Página desejada\n\n"
         "*Exemplos:*\n"
-        "`/historico_usuario`\n"
-        "`/historico_usuario 123456789`\n"
-        "`/historico_usuario 123456789 2`\n\n"
-        f"*ℹ️ Cada página exibe até {PAGE_SIZE} registros.*"
+        "`/historico\\_usuario`\n"
+        "`/historico\\_usuario 123456789`\n"
+        "`/historico\\_usuario 123456789 2`\n\n"
+        f"*ℹ️ Cada página exibe até {PAGE_SIZE} registros*"
     )
+
     args = context.args or []
     if len(args) == 1 and args[0].lower() == "ajuda":
         await update.message.reply_text(
