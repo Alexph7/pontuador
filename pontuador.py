@@ -135,7 +135,7 @@ async def init_db_pool():
     ADMINS = await carregar_admins_db()
 
 # --- Helpers de usuário (asyncpg) ---
-PAGE_SIZE = 17
+PAGE_SIZE = 20
 MAX_MESSAGE_LENGTH = 4000
 
 async def adicionar_usuario_db(
@@ -143,8 +143,8 @@ async def adicionar_usuario_db(
     username: str = "vazio",
     first_name: str = "vazio",
     last_name: str = "vazio",
-        display_choice: str = "indefinido",
-        nickname: str = "sem nick",
+    display_choice: str = "indefinido",
+    nickname: str = "sem nick",
     pool_override: asyncpg.Pool | None = None,
 ):
     pg = pool_override or pool
@@ -171,7 +171,7 @@ async def adicionar_usuario_db(
                 if mudou_username or mudou_firstname or mudou_lastname or mudou_display_choice or mudou_nickname:
                     logger.info(
                         f"[DB] {user_id} Atualizado: username: {username} "
-                        f"firstname: {first_name} lastname: {last_name}"
+                        f"firstname: {first_name} lastname: {last_name} "
                         f"displaychoice: {display_choice} nickname: {nickname}"
                     )
                     await conn.execute(
@@ -218,7 +218,7 @@ async def adicionar_usuario_db(
             else:
                 logger.info(
                     f"[DB] {user_id} Inserido: username: {username} "
-                    f"firstname: {first_name} lastname: {last_name}"
+                    f"firstname: {first_name} lastname: {last_name} "
                     f"display_choice: {display_choice} nickname: {nickname}"
                 )
                 await conn.execute(
@@ -628,13 +628,13 @@ async def atualizar_pontos(
 ) -> int | None:
     try:
         chat = await bot.get_chat(user_id)
-        username = chat.username or ""
-        first_name = chat.first_name or ""
-        last_name = chat.last_name or ""
+        username = chat.username or "vazio"
+        first_name = chat.first_name or "vazio"
+        last_name = chat.last_name or "vazio"
     except Exception:
-        username = ""
-        first_name = ""
-        last_name = ""
+        username = "vazio"
+        first_name = "vazio"
+        last_name = "vazio"
 
     usuario = await obter_ou_criar_usuario_db(
         user_id, username, first_name, last_name
