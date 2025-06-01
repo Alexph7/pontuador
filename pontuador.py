@@ -1038,11 +1038,6 @@ async def callback_historico(update: Update, context: CallbackContext):
             self.message = message
             self.callback_query = callback_query
 
-    # Verifica autenticação (usando o mesmo mét odo da função principal)
-    requester_id = query.from_user.id
-    if not context.user_data.get("is_admin"):
-        await query.edit_message_text("🔒 Você precisa autenticar com /admin.")
-        return
 
     # Rechama a função original reutilizando os parâmetros
     fake_update = FakeUpdate(query.from_user, query.message, query)
@@ -1273,7 +1268,6 @@ async def main():
     # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
-    app.add_handler(CallbackQueryHandler(callback_historico, pattern=r"^hist:\d+:\d+$"))
 
     logger.info("🔄 Iniciando polling...")
     await app.run_polling()
