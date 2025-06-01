@@ -805,7 +805,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
     is_callback = getattr(update, "callback_query", None) is not None
     if not is_callback:
         await update.message.reply_text(
-            "ℹ️ Precisar de ajuda, digite `/historico_usuario ajuda`",
+            "ℹ️ Precisar de ajuda digite `/historico_usuario ajuda`",
             parse_mode = "MarkdownV2"
         )
 
@@ -849,7 +849,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
         page = int(args[1])
     elif args:
         await update.message.reply_text(
-            "Uso incorreto. Digite `/historico_usuario ajuda`",
+            "Uso incorreto Digite `/historico_usuario ajuda`",
             parse_mode="MarkdownV2"
         )
         return ConversationHandler.END
@@ -898,14 +898,14 @@ async def historico_usuario(update: Update, context: CallbackContext):
     if not rows:
         if target_id is None:
             await update.message.reply_text(
-                f"ℹ️ Sem histórico na página {page}.",
+                f"ℹ️ Sem histórico na página {page}",
                 parse_mode="MarkdownV2"
             )
         else:
             alvo = nickname or str(target_id)
             alvo_esc = escape_markdown_v2(str(target_id))
             await update.message.reply_text(
-                f"ℹ️ Sem histórico para `{alvo_esc}` na página {page}.",
+                f"ℹ️ Sem histórico para `{alvo_esc}` na página {page}",
                 parse_mode="MarkdownV2"
             )
         return
@@ -941,7 +941,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
     for line in lines:
         # +1 para contabilizar o '\n' que será inserido
         if total_length + len(line) + 1 > MAX_MESSAGE_LENGTH - 50:
-            final_lines.append("⚠️ Atenção: parte da mensagem omitida por exceder o limite.")
+            final_lines.append("⚠️ Atenção: parte da mensagem omitida por exceder o limite")
             break
         final_lines.append(line)
         total_length += len(line) + 1
@@ -1028,7 +1028,7 @@ async def callback_historico(update: Update, context: CallbackContext):
         target_id = int(user_id_str)
         page = int(page_str)
     except Exception:
-        await query.edit_message_text("❌ Erro ao processar paginação.")
+        await query.edit_message_text("❌ Erro ao processar paginação")
         return
 
     # Simula um update.message para reutilizar a lógica
