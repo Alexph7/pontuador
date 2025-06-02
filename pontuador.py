@@ -69,8 +69,7 @@ NIVEIS_BRINDES = {
 
 #Estados da conversa
 (ADMIN_SENHA, ESPERANDO_SUPORTE, ADD_PONTOS_POR_ID, ADD_PONTOS_QTD, ADD_PONTOS_MOTIVO, DEL_PONTOS_ID, DEL_PONTOS_QTD,
- DEL_PONTOS_MOTIVO, ADD_ADMIN_ID, REM_ADMIN_ID, REMOVER_PONTUADOR_ID, BLOQUEAR_ID, BLOQUEAR_MOTIVO, DESBLOQUEAR_ID,
- ADD_PALAVRA_PROIBIDA, DEL_PALAVRA_PROIBIDA) = range(16)
+ DEL_PONTOS_MOTIVO, ADD_ADMIN_ID, REM_ADMIN_ID) = range(10)
 
 TEMPO_LIMITE_BUSCA = 10          # Tempo máximo (em segundos) para consulta
 
@@ -342,16 +341,15 @@ ADMIN_MENU = (
     "/add_pontos – Atribuir pontos a um usuário\n"
     "/del_pontos – remover pontos de um usuário\n"
     "/historico_usuario – historico de nomes do usuário\n"
-    "/add_admin – adicionar novo admin\n"
     "/rem_admin – remover admin\n"
-    "/rem_pontuador – Remover permissão de pontuador\n"
-    "/bloquear – Bloquear usuário\n"
-    "/desbloquear – Desbloquear usuário\n"
     "/listar_usuarios – lista de usuarios cadastrados\n"
     "/total_usuarios – quantidade total de usuarios cadastrados\n"
-    "/adapproibida – Adicionar palavra proibida\n"
-    "/delproibida – Remover palavra proibida\n"
-    "/listaproibida – Listar palavras proibidas\n"
+    # "/rem_pontuador – Remover permissão de pontuador\n"
+    # "/bloquear – Bloquear usuário\n"
+    # "/desbloquear – Desbloquear usuário\n"
+    # "/adapproibida – Adicionar palavra proibida\n"
+    # "/delproibida – Remover palavra proibida\n"
+    # "/listaproibida – Listar palavras proibidas\n"
 )
 
 
@@ -407,6 +405,7 @@ async def remover_admin_db(user_id: int):
         )
     except Exception as e:
         logger.error(f"Erro ao remover admin do banco: {e}")
+        raise
 
 
 ESCOLHENDO_DISPLAY, DIGITANDO_NICK = range(2)
@@ -1108,6 +1107,57 @@ async def callback_historico(update: Update, context: CallbackContext):
     await historico_usuario(fake_update, context)
 
 
+async def rem_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 1) Buscar lista de admins no banco
+    rows = await pool.fetch("SELECT user_id FROM admins ORDER BY user_id")
+    admin_ids = [row["user_id"] for row in rows]
+
+    if not admin_ids:
+        return await update.message.reply_text("⚠️ Não há administradores registrados.")
+
+    # 2) Montar texto enumerado e salvar em context.user_data
+    texto_listagem = "👥 Lista de Admins:\n\n"
+    for i, uid in enumerate(admin_ids, start=1):
+        texto_listagem += f"{i}. <code>{uid}</code>\n"
+    texto_listagem += "\nDigite o número correspondente ao admin que deseja remover:"
+
+    context.user_data["admin_lista"] = admin_ids
+    await update.message.reply_text(texto_listagem, parse_mode="HTML")
+
+    # Retorna o estado onde o próximo handler será chamado
+    return REM_ADMIN_ID
+
+async def rem_admin_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text.strip()
+
+    # 3) Validação básica
+    if not texto.isdigit():
+        return await update.message.reply_text("❗️Digite apenas o número correspondente.")
+
+    indice = int(texto) - 1
+    lista = context.user_data.get("admin_lista", [])
+
+    if indice < 0 or indice >= len(lista):
+        return await update.message.reply_text("❗️Número inválido.")
+
+    alvo_id = lista[indice]
+
+    # 4) Remover do banco
+    await pool.execute("DELETE FROM admins WHERE user_id = $1", alvo_id)
+
+    # 5) Remover do set local (se existir)
+    ADMINS.discard(alvo_id)
+
+    await update.message.reply_text(
+        f"✅ Admin removido com sucesso: <code>{alvo_id}</code>",
+        parse_mode="HTML"
+    )
+
+    # Ótimo prática: limpar user_data para não deixar lixo
+    del context.user_data["admin_lista"]
+    return ConversationHandler.END
+
+
 async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /listar_usuarios [page | nome <prefixo> | id <prefixo>]
@@ -1224,8 +1274,7 @@ main_conv = ConversationHandler(
         CommandHandler("admin", admin, filters=filters.ChatType.PRIVATE),
         CommandHandler("add_pontos", add_pontos),
         CommandHandler("del_pontos", del_pontos),
-        # CommandHandler("add_admin", add_admin),
-        # CommandHandler("rem_admin", rem_admin),
+        CommandHandler("rem_admin", rem_admin),
     ],
     states={
         # /admin → senha
@@ -1259,17 +1308,11 @@ main_conv = ConversationHandler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, del_pontos_motivo),
             MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
         ],
-
         # # /add_admin → id
-        # ADD_ADMIN_ID: [
-        #     MessageHandler(filters.TEXT & ~filters.COMMAND, add_admin_execute),
-        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
-        # ],
-        # # /rem_admin → id
-        # REM_ADMIN_ID: [
-        #     MessageHandler(filters.TEXT & ~filters.COMMAND, rem_admin_execute),
-        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
-        # ],
+        REM_ADMIN_ID: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, rem_admin_execute),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        ],
     },
     fallbacks=[CommandHandler("cancelar", cancelar)],
     allow_reentry=True,
