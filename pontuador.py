@@ -540,7 +540,7 @@ async def meus_pontos(update: Update, context: CallbackContext):
 
     except Exception as e:
         logger.error(f"Erro ao buscar pontos do usuário {user.id}: {e}", exc_info=True)
-    await update.message.reply_text(
+        await update.message.reply_text(
             "❌ Desculpe, tivemos um problema ao acessar as suas informações. "
             "Tente novamente mais tarde. Se o problema persistir contate o suporte."
     )
