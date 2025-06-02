@@ -72,8 +72,6 @@ NIVEIS_BRINDES = {
  DEL_PONTOS_MOTIVO, ADD_ADMIN_ID, REM_ADMIN_ID, REMOVER_PONTUADOR_ID, BLOQUEAR_ID, BLOQUEAR_MOTIVO, DESBLOQUEAR_ID,
  ADD_PALAVRA_PROIBIDA, DEL_PALAVRA_PROIBIDA) = range(16)
 
-hoje = hoje_sp()
-
 TEMPO_LIMITE_BUSCA = 10          # Tempo máximo (em segundos) para consulta
 
 
@@ -197,7 +195,7 @@ async def adicionar_usuario_db(
                         user_id, username, first_name, last_name, display_choice, nickname
                     )
 
-                    if old['ultima_interacao'] != hoje:
+                    if old['ultima_interacao'] != hoje_sp():
                         await conn.execute(
                             """
                             UPDATE usuarios
@@ -205,7 +203,7 @@ async def adicionar_usuario_db(
                                    ultima_interacao = $1
                              WHERE user_id = $2::bigint
                             """,
-                            hoje, user_id
+                            hoje_sp(), user_id
                         )
                         await conn.execute(
                             """
@@ -230,7 +228,7 @@ async def adicionar_usuario_db(
                     VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, 1)
                     """,
                     user_id, username, first_name, last_name,
-                    display_choice, nickname, hoje
+                    display_choice, nickname, hoje_sp()
                 )
 
                 await conn.execute(
@@ -552,7 +550,7 @@ async def como_ganhar(update: Update, context: CallbackContext):
         for pontos, descricao in sorted(NIVEIS_BRINDES.items())
     )
     await update.message.reply_text(
-        "🎯 Você Pode Ganha Pontos Por:\n\n"
+        "🎯Você Pode Ganha Pontos Por:\n"
         "• Compras por ID em videos.\n"
         "• Até 1 comentário diario em grupos ou interação com bot\n"
         "• Muito cedo, mais opções de como ganhar pontos aparecerá em breve. \n\n"
@@ -776,7 +774,7 @@ async def tratar_presenca(update, context):
     #    extraindo só a data do último timestamp
     ts = reg.get('ultima_interacao') if reg else None  # datetime.datetime ou None
     ultima_data = None if ts is None else ts.date() if hasattr(ts, 'date') else ts
-    if ultima_data is None or ultima_data != hoje:
+    if ultima_data is None or ultima_data != hoje_sp():
         # 3.1) Atribui o ponto
         await atualizar_pontos(user.id, 1, 'Presença diária', context.bot)
 
@@ -788,7 +786,7 @@ async def tratar_presenca(update, context):
             "UPDATE usuarios SET ultima_interacao = $1 WHERE user_id = $2::bigint",
             agora, user.id
         )
-        logger.info(f"[PRESENÇA] 1 ponto para {user.id} em {hoje}")
+        logger.info(f"[PRESENÇA] 1 ponto para {user.id} em {hoje_sp()}")
 
 
 async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
