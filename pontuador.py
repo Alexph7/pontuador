@@ -257,48 +257,21 @@ async def obter_ou_criar_usuario_db(
     first_name: str,
     last_name: str,
 ):
-    hoje = hoje_sp()
-
     perfil = await pool.fetchrow("SELECT * FROM usuarios WHERE user_id = $1", user_id)
 
-    if perfil is None:
-        await pool.execute(
-            """
-            INSERT INTO usuarios (
-                user_id, username, first_name, last_name,
-                display_choice, nickname,
-                pontos, nivel_atingido, ultima_interacao,
-                inserido_em, atualizado_em
-            )
-            VALUES (
-                $1, $2, $3, $4,
-                'indefinido', 'sem nick',
-                1, 0, $5,
-                NOW(), NOW()
-            )
-            """,
-            user_id, username or "vazio", first_name or "vazio", last_name or "vazio", hoje
-        )
+    if perfil:
+        return perfil  # Já existe, retorna
 
-        await pool.execute(
-            """
-            INSERT INTO usuario_history
-              (user_id, status, username, first_name, last_name, display_choice, nickname)
-            VALUES ($1, 'Inserido', $2, $3, $4, 'indefinido', 'sem nick')
-            """,
-            user_id, username or "vazio", first_name or "vazio", last_name or "vazio"
-        )
+    # Não existe: chama a função que já trata de inserir
+    await adicionar_usuario_db(
+        user_id=user_id,
+        username=username,
+        first_name=first_name,
+        last_name=last_name,
+    )
 
-        await pool.execute(
-            """
-            INSERT INTO historico_pontos (user_id, pontos, motivo)
-            VALUES ($1, 1, 'ponto diário por interação')
-            """,
-            user_id
-        )
-
-        perfil = await pool.fetchrow("SELECT * FROM usuarios WHERE user_id = $1", user_id)
-
+    # Agora busca de novo e retorna
+    perfil = await pool.fetchrow("SELECT * FROM usuarios WHERE user_id = $1", user_id)
     return perfil
 
 async def registrar_historico_db(user_id: int, pontos: int, motivo: str | None = None):
