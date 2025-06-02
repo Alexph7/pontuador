@@ -1157,110 +1157,135 @@ async def rem_admin_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     del context.user_data["admin_lista"]
     return ConversationHandler.END
 
+PAGE_SIZE_LISTAR = 50
 
 async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    /listar_usuarios [page | nome <prefixo> | id <prefixo>]
-    Mostra lista de usuários com paginação e filtros opcionais.
-    - page: número da página (padrão 1)
-    - nome <prefixo>: filtra names começando com prefixo
-    - id <prefixo>: filtra IDs começando com prefixo
-    Somente ADMINS podem executar.
+    Lista usuários cadastrados de forma paginada, exibindo índice geral (1-based), user_id e first_name
+    (ou "username: <valor>" se first_name estiver vazio, ou "vazio" se ambos estiverem vazios).
+
+    Uso: /listar_usuarios [<número_da_página>]
+    Exemplo:
+      /listar_usuarios        → página 1
+      /listar_usuarios 2      → página 2
     """
-    user_id = update.effective_user.id
-    if user_id not in ADMINS:
-        return await update.message.reply_text("❌ Você não tem permissão para isso.")
-
+    # 1) Determinar qual página está sendo solicitada (default = 1)
     args = context.args or []
-    page = 1
-    filtro_sql = ""
-    filtro_args = []
-
-    # Interpretar subcomandos de filtro
-    if args:
-        if args[0].isdigit():
-            page = max(1, int(args[0]))
-        elif args[0].lower() == 'nome' and len(args) > 1:
-            prefix = args[1]
-            filtro_sql = "WHERE first_name ILIKE $1"
-            filtro_args = [f"{prefix}%"]
-        elif args[0].lower() == 'id' and len(args) > 1:
-            prefix = args[1]
-            filtro_sql = "WHERE CAST(user_id AS TEXT) LIKE $1"
-            filtro_args = [f"{prefix}%"]
-
     try:
-        # Conta total de registros para paginação
-        total = await asyncio.wait_for(
-            pool.fetchval(f"SELECT COUNT(*) FROM usuarios {filtro_sql}", *filtro_args),
-            timeout=TEMPO_LIMITE_BUSCA
-        )
+        page = int(args[0]) if args else 1
+    except ValueError:
+        await update.message.reply_text("❌ Página inválida. Use /listar_usuarios <número>.")
+        return
+
+    if page < 1:
+        page = 1
+
+    # 2) Calcular total de usuários para saber quantas páginas existem
+    try:
+        total_usuarios = await pool.fetchval("SELECT COUNT(*) FROM usuarios")
     except Exception as e:
-        logger.error("Erro ao contar usuários: %s", e)
-        return await update.message.reply_text("❌ Erro ao acessar o banco.")
+        logger.error(f"Erro ao contar usuários: {e}")
+        await update.message.reply_text("❌ Não foi possível obter o total de usuários.")
+        return
 
-    total_pages = max(1, math.ceil(total / PAGE_SIZE))
-    if page > total_pages:
-        return await update.message.reply_text(
-            f"ℹ️ Página {page} não existe. Só até {total_pages}."
+    total_paginas = max(1, math.ceil(total_usuarios / PAGE_SIZE_LISTAR))
+    if page > total_paginas:
+        await update.message.reply_text(
+            f"ℹ️ A página {page} não existe. Só há {total_paginas} páginas"
         )
+        return
 
+    # 3) Buscar só os usuários daquela página
     offset = (page - 1) * PAGE_SIZE
-    query = (
-        f"SELECT user_id, first_name FROM usuarios {filtro_sql} "
-        f"ORDER BY user_id LIMIT $1 OFFSET $2"
-    )
-
     try:
-        rows = await asyncio.wait_for(
-            pool.fetch(query, *(filtro_args + [PAGE_SIZE, offset])),
-            timeout=TEMPO_LIMITE_BUSCA
-        )
-    except asyncio.TimeoutError:
-        return await update.message.reply_text(
-            "❌ A consulta demorou demais. Tente novamente mais tarde."
+        rows = await pool.fetch(
+            "SELECT user_id, first_name, username FROM usuarios ORDER BY user_id LIMIT $1 OFFSET $2",
+            PAGE_SIZE,
+            offset
         )
     except Exception as e:
-        logger.error("Erro ao listar usuários: %s", e)
-        return await update.message.reply_text(
-            "❌ Erro ao acessar o banco. Tente novamente mais tarde."
-        )
+        logger.error(f"Erro ao buscar usuários: {e}")
+        await update.message.reply_text("❌ Não foi possível acessar a lista de usuários.")
+        return
 
     if not rows:
-        return await update.message.reply_text("ℹ️ Nenhum usuário encontrado.")
+        await update.message.reply_text("ℹ️ Nenhum usuário encontrado nesta página.")
+        return
 
-    # Monta mensagem e botões de navegação
-    header = f"🗒️ Usuários (página {page}/{total_pages}, total {total}):"
-    lines = [header]
-    for r in rows:
-        nome = r['first_name'] or '<sem nome>'
-        lines.append(f"• `{r['user_id']}` — {nome}")
-    text = "\n".join(lines)
+    # 4) Montar as linhas da mensagem
+    lines = []
+    # Para numerar corretamente de 1 até total_usuarios, calculamos o índice global:
+    # índice_global = offset + índice_na_página (1-based)
+    for i, row in enumerate(rows, start=1):
+        indice_global = offset + i
+        user_id = row["user_id"]
+        first_name_raw = (row["first_name"] or "").strip()
+        username_raw = (row["username"] or "").strip()
 
-    # Inline keyboard para navegar páginas
+        if first_name_raw:
+            display = first_name_raw
+        elif username_raw:
+            display = f"username: {username_raw}"
+        else:
+            display = "vazio"
+
+        # Escapa caracteres especiais para MarkdownV2
+        display_esc = escape_markdown_v2(display)
+
+        # Escapamos o ponto após o índice (ex: “1\.”) para o MarkdownV2 aceitar
+        lines.append(f"{indice_global}\\.`{user_id}` — {display_esc}")
+
+    # 5) Texto final
+    header = f"👥 **Usuários cadastrados \\(página {page}/{total_paginas}, total {total_usuarios}\\):**\n\n"
+    texto = header + "\n".join(lines)
+
+    # 6) Botões de navegação (Anterior / Próximo) se houver mais de uma página
     buttons = []
     if page > 1:
-        buttons.append(InlineKeyboardButton('◀️ Anterior', callback_data=f"usuarios|{page-1}|{' '.join(args)}"))
-    if page < total_pages:
-        buttons.append(InlineKeyboardButton('Próxima ▶️', callback_data=f"usuarios|{page+1}|{' '.join(args)}"))
-    keyboard = InlineKeyboardMarkup([buttons]) if buttons else None
+        buttons.append(
+            InlineKeyboardButton("◀️ Anterior", callback_data=f"usuarios|{page-1}")
+        )
+    if page < total_paginas:
+        buttons.append(
+            InlineKeyboardButton("Próximo ▶️", callback_data=f"usuarios|{page+1}")
+        )
+    reply_markup = InlineKeyboardMarkup([buttons]) if buttons else None
 
-    await update.message.reply_text(text, parse_mode='MarkdownV2', reply_markup=keyboard)
+    # 7) Enviar (ou editar mensagem se for callback)
+    if update.callback_query:
+        # Se veio de um callback inline, editamos a mensagem existente
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(
+            texto,
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=reply_markup
+        )
+    else:
+        # Se veio de um comando /listar_usuarios
+        await update.message.reply_text(
+            texto,
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=reply_markup
+        )
 
-
+# Callback para navegação de páginas
 async def callback_listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Callback para navegação da listagem de usuários.
-    """
     query = update.callback_query
     await query.answer()
-    data = query.data.split('|')
-    _, page_str, args_str = data
-    # Reconstrói contexto e chama listar_usuarios
-    context.args = args_str.split() if args_str else []
-    # Simula update.message para reaproveitar a função
-    return await listar_usuarios(query, context)
 
+    # O callback_data foi definido como "usuarios|<pagina>"
+    data = query.data.split("|")
+    if data[0] != "usuarios":
+        return  # não é o callback esperado
+    try:
+        nova_pagina = int(data[1])
+    except (IndexError, ValueError):
+        return
+
+    # Simula args e chama listar_usuarios novamente, agora em modo callback
+    context.args = [str(nova_pagina)]
+    # Reaproveita a mesma função para editar a mensagem
+    await listar_usuarios(update, context)
 
 async def on_startup(app):
     global ADMINS
