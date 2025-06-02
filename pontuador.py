@@ -74,7 +74,6 @@ NIVEIS_BRINDES = {
 
 TEMPO_LIMITE_BUSCA = 10          # Tempo máximo (em segundos) para consulta
 
-
 async def init_db_pool():
     global pool, ADMINS
     pool = await asyncpg.create_pool(dsn=DATABASE_URL,min_size=1,max_size=10)
@@ -629,6 +628,61 @@ async def add_pontos_motivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+async def del_pontos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Inicia o fluxo de remoção de pontos.
+    """
+    if update.effective_user.id not in ADMINS:
+        await update.message.reply_text("🔒 Você precisa autenticar: use /admin primeiro.")
+        return ConversationHandler.END
+
+    await update.message.reply_text("🧾 Remoção de pontos: qual é o user_id do usuário?")
+    return DEL_PONTOS_ID
+
+
+async def del_pontos_IDuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if not text.isdigit():
+        return await update.message.reply_text("❗️ ID inválido. Digite apenas números.")
+
+    context.user_data["del_pt_id"] = int(text)
+    await update.message.reply_text("✏️ Quantos pontos deseja remover?")
+    return DEL_PONTOS_QTD
+
+
+async def del_pontos_quantidade(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if not text.isdigit():
+        return await update.message.reply_text("❗️ Digite apenas números positivos.")
+
+    qtd = int(text)
+    if qtd <= 0:
+        return await update.message.reply_text("❗️ O valor deve ser maior que zero.")
+
+    context.user_data["del_pt_value"] = qtd
+    await update.message.reply_text("📄 Qual o motivo dessa remoção?")
+    return DEL_PONTOS_MOTIVO
+
+
+async def del_pontos_motivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    motivo = update.message.text.strip()
+    if not motivo:
+        return await update.message.reply_text("❗️ Motivo obrigatório. Digite um texto.")
+
+    alvo_id = context.user_data.pop("del_pt_id")
+    pontos  = context.user_data.pop("del_pt_value")
+    motivo  = update.message.text.strip()
+
+    novo_total = await atualizar_pontos(alvo_id, -pontos, f"(removido) {motivo}", context.bot)
+
+    await update.message.reply_text(
+        f"✅ {pontos} pts removidos de {alvo_id}.\n"
+        f"Motivo: {motivo}\n"
+        f"Total agora: {novo_total} pts."
+    )
+    return ConversationHandler.END
+
+
 async def atualizar_pontos(
         user_id: int,
         delta: int,
@@ -1169,7 +1223,7 @@ main_conv = ConversationHandler(
     entry_points=[
         CommandHandler("admin", admin, filters=filters.ChatType.PRIVATE),
         CommandHandler("add_pontos", add_pontos),
-        # CommandHandler("del_pontos", del_pontos),
+        CommandHandler("del_pontos", del_pontos),
         # CommandHandler("add_admin", add_admin),
         # CommandHandler("rem_admin", rem_admin),
     ],
@@ -1193,19 +1247,18 @@ main_conv = ConversationHandler(
             MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
         ],
 
-        # /del_pontos → id, qtd, motivo
-        # DEL_PONTOS_ID: [
-        #     MessageHandler(filters.TEXT & ~filters.COMMAND, del_pontos_IDuser),
-        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
-        # ],
-        # DEL_PONTOS_QTD: [
-        #     MessageHandler(filters.TEXT & ~filters.COMMAND, del_pontos_quantidade),
-        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
-        # ],
-        # DEL_PONTOS_MOTIVO: [
-        #     MessageHandler(filters.TEXT & ~filters.COMMAND, del_pontos_motivo),
-        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
-        # ],
+        DEL_PONTOS_ID: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, del_pontos_IDuser),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        ],
+        DEL_PONTOS_QTD: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, del_pontos_quantidade),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        ],
+        DEL_PONTOS_MOTIVO: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, del_pontos_motivo),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+        ],
 
         # # /add_admin → id
         # ADD_ADMIN_ID: [
