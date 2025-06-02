@@ -251,17 +251,55 @@ async def adicionar_usuario_db(
                 )
 
 
-async def obter_ou_criar_usuario_db(user_id: int, username: str, first_name: str, last_name: str):
+async def obter_ou_criar_usuario_db(
+    user_id: int,
+    username: str,
+    first_name: str,
+    last_name: str,
+):
+    hoje = hoje_sp()
+
     perfil = await pool.fetchrow("SELECT * FROM usuarios WHERE user_id = $1", user_id)
+
     if perfil is None:
         await pool.execute(
-            "INSERT INTO usuarios (user_id, username, first_name, last_name, display_choice, nickname) "
-            "VALUES ($1, $2, $3, $4, $5, $6)",
-            user_id, username or "vazio", first_name or "vazio", last_name or "vazio", "indefinido", "sem nick"
-    )
-        perfil = await pool.fetchrow("SELECT * FROM usuarios WHERE user_id = $1", user_id)
-    return perfil
+            """
+            INSERT INTO usuarios (
+                user_id, username, first_name, last_name,
+                display_choice, nickname,
+                pontos, nivel_atingido, ultima_interacao,
+                inserido_em, atualizado_em
+            )
+            VALUES (
+                $1, $2, $3, $4,
+                'indefinido', 'sem nick',
+                1, 0, $5,
+                NOW(), NOW()
+            )
+            """,
+            user_id, username or "vazio", first_name or "vazio", last_name or "vazio", hoje
+        )
 
+        await pool.execute(
+            """
+            INSERT INTO usuario_history
+              (user_id, status, username, first_name, last_name, display_choice, nickname)
+            VALUES ($1, 'Inserido', $2, $3, $4, 'indefinido', 'sem nick')
+            """,
+            user_id, username or "vazio", first_name or "vazio", last_name or "vazio"
+        )
+
+        await pool.execute(
+            """
+            INSERT INTO historico_pontos (user_id, pontos, motivo)
+            VALUES ($1, 1, 'ponto diário por interação')
+            """,
+            user_id
+        )
+
+        perfil = await pool.fetchrow("SELECT * FROM usuarios WHERE user_id = $1", user_id)
+
+    return perfil
 
 async def registrar_historico_db(user_id: int, pontos: int, motivo: str | None = None):
     """
@@ -662,7 +700,6 @@ async def atualizar_pontos(
         """,
         novos, nivel, user_id
     )
-
     return novos
 
 
@@ -753,7 +790,7 @@ async def tratar_presenca(update, context):
     # 1) Garante que exista sem logar toda vez
     await adicionar_usuario_db(user_id=user.id, username=user.username or "vazio",
                                first_name=user.first_name or "vazio", last_name=user.last_name or "vazio",
-                               display_choice="anonymous", nickname="sem nick")
+                               display_choice="indefinido", nickname="sem nick")
     # 2) Busca registro completo
     reg = await obter_ou_criar_usuario_db(
         user_id=user.id,
@@ -1266,7 +1303,6 @@ async def main():
     # )
 
     # Presença em grupos
-    app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
 
     logger.info("🔄 Iniciando polling...")
