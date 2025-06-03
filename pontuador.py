@@ -179,7 +179,7 @@ async def adicionar_usuario_db(
                     logger.info(
                         f"[DB] {user_id} Atualizado: username: {username} "
                         f"firstname: {first_name} lastname: {last_name} "
-                        f"displaychoice: {display_choice} nickname: {nickname}"
+                        f"dischoice: {display_choice} nickname: {nickname}"
                     )
                     await conn.execute(
                         """
@@ -1078,7 +1078,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
             f"username: `{escape_markdown_v2(r['username'])}` "
             f"firstname: `{escape_markdown_v2(r['first_name'])}` "
             f"lastname: `{escape_markdown_v2(r['last_name'])}` "
-            f"displaychoice: `{escape_markdown_v2(r['display_choice'])}` "
+            f"dischoice: `{escape_markdown_v2(r['display_choice'])}` "
             f"nickname: `{escape_markdown_v2(r['nickname'])}`"
         )
 
