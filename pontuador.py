@@ -29,8 +29,10 @@ from telegram.ext import (
 )
 
 
-def hoje_sp():
+def hoje_data_sp():
     return datetime.now(tz=ZoneInfo("America/Sao_Paulo")).date()
+def hoje_hora_sp():
+    return datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
 
 pool: asyncpg.Pool | None = None
 logging.basicConfig(level=logging.INFO)
@@ -88,8 +90,8 @@ async def init_db_pool():
             nivel_atingido     INTEGER NOT NULL DEFAULT 0,
             is_pontuador       BOOLEAN NOT NULL DEFAULT FALSE,
             ultima_interacao   DATE,                                -- só para pontuar 1x/dia
-            inserido_em        TIMESTAMP NOT NULL DEFAULT NOW(),    -- quando o usuário foi inserido
-            atualizado_em      TIMESTAMP NOT NULL DEFAULT NOW(),     -- quando qualquer coluna for atualizada
+            inserido_em        TIMESTAMPTZ NOT NULL DEFAULT NOW(),    -- quando o usuário foi inserido
+            atualizado_em      TIMESTAMPTZ NOT NULL DEFAULT NOW(),     -- quando qualquer coluna for atualizada
             display_choice     VARCHAR(20) NOT NULL DEFAULT 'indefinido',
             nickname           VARCHAR(50) NOT NULL DEFAULT 'sem nick',
             via_start          BOOLEAN NOT NULL DEFAULT FALSE
@@ -100,14 +102,9 @@ async def init_db_pool():
             user_id BIGINT REFERENCES usuarios(user_id),
             pontos INTEGER NOT NULL,
             motivo TEXT NOT NULL DEFAULT 'Não Especificado',
-            data TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            data TIMESTAMPTZ  DEFAULT CURRENT_TIMESTAMP
         );
-       CREATE TABLE IF NOT EXISTS usuarios_bloqueados (
-            user_id BIGINT PRIMARY KEY,
-            motivo TEXT NOT NULL DEFAULT 'Não Especificado',
-            data TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-
+     
        CREATE TABLE IF NOT EXISTS palavras_proibidas (
             id SERIAL PRIMARY KEY,
             palavra TEXT UNIQUE NOT NULL
@@ -124,7 +121,7 @@ async def init_db_pool():
             username     TEXT      NOT NULL DEFAULT 'vazio',
             first_name   TEXT      NOT NULL DEFAULT 'vazio',
             last_name    TEXT      NOT NULL DEFAULT 'vazio',
-            inserido_em  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            inserido_em  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             display_choice  VARCHAR(20) NOT NULL DEFAULT 'indefinido',
             nickname        VARCHAR(50) NOT NULL DEFAULT 'sem nick',
             via_start          BOOLEAN NOT NULL DEFAULT FALSE
@@ -196,7 +193,7 @@ async def adicionar_usuario_db(
                         user_id, username, first_name, last_name, display_choice, nickname
                     )
 
-                    if old['ultima_interacao'] != hoje_sp():
+                    if old['ultima_interacao'] != hoje_data_sp():
                         await conn.execute(
                             """
                             UPDATE usuarios
@@ -204,7 +201,7 @@ async def adicionar_usuario_db(
                                    ultima_interacao = $1
                              WHERE user_id = $2::bigint
                             """,
-                            hoje_sp(), user_id
+                            hoje_data_sp(), user_id
                         )
                         await conn.execute(
                             """
@@ -229,7 +226,7 @@ async def adicionar_usuario_db(
                     VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, 1, $8)
                     """,
                     user_id, username, first_name, last_name,
-                    display_choice, nickname, hoje_sp(), via_start
+                    display_choice, nickname, hoje_data_sp(), via_start
                 )
 
                 await conn.execute(
@@ -349,6 +346,7 @@ ADMIN_MENU = (
     "/rem_admin – remover admin\n"
     "/listar_usuarios – lista de usuarios cadastrados\n"
     "/estatisticas – quantidade total de usuarios cadastrados\n"
+    "/listar_via_start – usuario que se cadastraram via start\n"
     # "/rem_pontuador – Remover permissão de pontuador\n"
     # "/bloquear – Bloquear usuário\n"
     # "/desbloquear – Desbloquear usuário\n"
@@ -415,7 +413,7 @@ async def remover_admin_db(user_id: int):
 
 ESCOLHENDO_DISPLAY, DIGITANDO_NICK = range(2)
 
-# Handler para /start
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
@@ -516,6 +514,77 @@ async def receber_nickname(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(f"✅ Nickname salvo: '' **{nick}** '', agora para prosseguir escolha uma opção no meu ao lado", parse_mode="Markdown")
     return ConversationHandler.END
+
+
+USUARIOS_POR_PAGINA = 20
+
+async def listar_via_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    page = int(context.args[0]) if context.args and context.args[0].isdigit() else 1
+    offset = (page - 1) * USUARIOS_POR_PAGINA
+
+    try:
+        total = await pool.fetchval("SELECT COUNT(*) FROM usuarios WHERE via_start = TRUE")
+        usuarios = await pool.fetch(
+            """
+            SELECT user_id, username, first_name, last_name, inserido_em
+              FROM usuarios
+             WHERE via_start = TRUE
+             ORDER BY inserido_em ASC
+             LIMIT $1 OFFSET $2
+            """,
+            USUARIOS_POR_PAGINA, offset
+        )
+
+        if not usuarios:
+            await update.message.reply_text("Nenhum usuário encontrado nesta página.")
+            return
+
+        linhas = []
+        for u in usuarios:
+            nome = u["first_name"] or ""
+            sobrenome = u["last_name"] or ""
+            username = f"@{u['username']}" if u["username"] != "vazio" else "nao tem"
+            inserido_em = u["inserido_em"]
+            if inserido_em:
+                data_sp = inserido_em.astimezone(ZoneInfo("America/Sao_Paulo"))
+                data_registro = data_sp.strftime("%d/%m/%Y %H:%M:%S")
+            else:
+                data_registro = "N/A"
+
+            linhas.append(
+                f"• Data: {data_registro} ID: `{u['user_id']}` Nome: {nome}  Sobrenome: {sobrenome} Username: {username}".strip()
+            )
+        texto = "*Usuários que entraram via /start:*\n\n" + "\n".join(linhas)
+        texto += f"\n\nPágina {page} de {((total - 1) // USUARIOS_POR_PAGINA) + 1}"
+
+        # Botões de paginação
+        botoes = []
+        if page > 1:
+            botoes.append(InlineKeyboardButton("⬅️ Anterior", callback_data=f"via_start:{page-1}"))
+        if offset + USUARIOS_POR_PAGINA < total:
+            botoes.append(InlineKeyboardButton("Próxima ➡️", callback_data=f"via_start:{page+1}"))
+
+        markup = InlineKeyboardMarkup([botoes]) if botoes else None
+
+        await update.message.reply_text(texto, parse_mode="MarkdownV2", reply_markup=markup)
+
+    except Exception as e:
+        logger.error(f"Erro ao listar via_start: {e}")
+        await update.message.reply_text("❌ Ocorreu um erro ao listar os usuários.")
+
+
+async def paginacao_via_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if not data.startswith("via_start:"):
+        return
+
+    page = int(data.split(":")[1])
+    context.args = [str(page)]
+    update.message = query.message
+    await listar_via_start(update, context)
 
 
 async def meus_pontos(update: Update, context: CallbackContext):
@@ -838,7 +907,7 @@ async def tratar_presenca(update, context):
     #    extraindo só a data do último timestamp
     ts = reg.get('ultima_interacao') if reg else None  # datetime.datetime ou None
     ultima_data = None if ts is None else ts.date() if hasattr(ts, 'date') else ts
-    if ultima_data is None or ultima_data != hoje_sp():
+    if ultima_data is None or ultima_data != hoje_data_sp():
         # Atribui o ponto
         await atualizar_pontos(user.id, 1, 'Presença diária', context.bot)
 
@@ -850,7 +919,7 @@ async def tratar_presenca(update, context):
             "UPDATE usuarios SET ultima_interacao = $1 WHERE user_id = $2::bigint",
             agora, user.id
         )
-        logger.info(f"[PRESENÇA] 1 ponto para {user.id} em {hoje_sp()}")
+        logger.info(f"[PRESENÇA] 1 ponto para {user.id} em {hoje_data_sp()}")
 
 
 async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
@@ -1322,7 +1391,7 @@ async def estatisticas(update: Update, context: ContextTypes.DEFAULT_TYPE):
       5. Total de pontos removidos hoje
     """
     try:
-        hoje = hoje_sp()  # data de hoje em America/Sao_Paulo
+        hoje = hoje_data_sp()  # data de hoje em America/Sao_Paulo
 
         # === NO TEMPO T'ODO ===
 
@@ -1542,19 +1611,13 @@ async def main():
     app.add_handler(CommandHandler('meus_pontos', meus_pontos))
     app.add_handler(CommandHandler('como_ganhar', como_ganhar))
     app.add_handler(CallbackQueryHandler(callback_historico, pattern=r"^hist:\d+:\d+$"))
+    app.add_handler(CallbackQueryHandler(paginacao_via_start, pattern=r"^via_start:\d+$"))
     app.add_handler(CommandHandler('historico', historico))
     app.add_handler(CommandHandler('ranking_top10', ranking_top10))
-    # app.add_handler(CommandHandler('ranking_top10q', ranking_top10q))
-    app.add_handler(
-        CommandHandler("historico_usuario", historico_usuario)
-    )
-    app.add_handler(
-        CommandHandler("listar_usuarios", listar_usuarios)
-    )
-    app.add_handler(
-        CommandHandler("estatisticas", estatisticas)
-    )
-
+    app.add_handler(CommandHandler("historico_usuario", historico_usuario))
+    app.add_handler(CommandHandler("listar_usuarios", listar_usuarios))
+    app.add_handler(CommandHandler("listar_via_start", listar_via_start))
+    app.add_handler(CommandHandler("estatisticas", estatisticas))
     # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
 
