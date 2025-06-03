@@ -91,7 +91,8 @@ async def init_db_pool():
             inserido_em        TIMESTAMP NOT NULL DEFAULT NOW(),    -- quando o usuário foi inserido
             atualizado_em      TIMESTAMP NOT NULL DEFAULT NOW(),     -- quando qualquer coluna for atualizada
             display_choice     VARCHAR(20) NOT NULL DEFAULT 'indefinido',
-            nickname           VARCHAR(50) NOT NULL DEFAULT 'sem nick'
+            nickname           VARCHAR(50) NOT NULL DEFAULT 'sem nick',
+            via_start          BOOLEAN NOT NULL DEFAULT FALSE
         );
 
        CREATE TABLE IF NOT EXISTS historico_pontos (
@@ -125,7 +126,8 @@ async def init_db_pool():
             last_name    TEXT      NOT NULL DEFAULT 'vazio',
             inserido_em  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             display_choice  VARCHAR(20) NOT NULL DEFAULT 'indefinido',
-            nickname        VARCHAR(50) NOT NULL DEFAULT 'sem nick'
+            nickname        VARCHAR(50) NOT NULL DEFAULT 'sem nick',
+            via_start          BOOLEAN NOT NULL DEFAULT FALSE
         );
         """)
     ADMINS = await carregar_admins_db()
@@ -141,6 +143,7 @@ async def adicionar_usuario_db(
     last_name: str = "vazio",
     display_choice: str = "indefinido",
     nickname: str = "sem nick",
+    via_start: bool = False,
     pool_override: asyncpg.Pool | None = None,
 ):
     pg = pool_override or pool
@@ -213,7 +216,7 @@ async def adicionar_usuario_db(
                         )
             else:
                 logger.info(
-                    f"[DB] {user_id} Inserido: username: {username} "
+                    f"[DB] {user_id} Inserido: via_start={via_start}, username: {username} "
                     f"firstname: {first_name} lastname: {last_name} "
                     f"display_choice: {display_choice} nickname: {nickname}"
                 )
@@ -222,20 +225,20 @@ async def adicionar_usuario_db(
                     INSERT INTO usuarios
                       (user_id, username, first_name, last_name,
                        display_choice, nickname,
-                       inserido_em, ultima_interacao, pontos)
-                    VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, 1)
+                       inserido_em, ultima_interacao, pontos, via_start)
+                    VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, 1, $8)
                     """,
                     user_id, username, first_name, last_name,
-                    display_choice, nickname, hoje_sp()
+                    display_choice, nickname, hoje_sp(), via_start
                 )
 
                 await conn.execute(
                     """
                     INSERT INTO usuario_history
-                      (user_id, status, username, first_name, last_name, display_choice, nickname)
-                    VALUES ($1::bigint, 'Inserido', $2, $3, $4, $5, $6)
+                      (user_id, status, username, first_name, last_name, display_choice, nickname, via_start)
+                    VALUES ($1::bigint, 'Inserido', $2, $3, $4, $5, $6, $7)
                     """,
-                    user_id, username, first_name, last_name, display_choice, nickname
+                    user_id, username, first_name, last_name, display_choice, nickname, via_start
                 )
 
                 await conn.execute(
@@ -252,6 +255,7 @@ async def obter_ou_criar_usuario_db(
     username: str,
     first_name: str,
     last_name: str,
+    via_start: bool = False
 ):
     perfil = await pool.fetchrow("SELECT * FROM usuarios WHERE user_id = $1", user_id)
 
@@ -264,6 +268,7 @@ async def obter_ou_criar_usuario_db(
         username=username,
         first_name=first_name,
         last_name=last_name,
+        via_start=via_start
     )
 
     # Agora busca de novo e retorna
@@ -343,7 +348,7 @@ ADMIN_MENU = (
     "/historico_usuario – historico de nomes do usuário\n"
     "/rem_admin – remover admin\n"
     "/listar_usuarios – lista de usuarios cadastrados\n"
-    "/total_usuarios – quantidade total de usuarios cadastrados\n"
+    "/estatisticas – quantidade total de usuarios cadastrados\n"
     # "/rem_pontuador – Remover permissão de pontuador\n"
     # "/bloquear – Bloquear usuário\n"
     # "/desbloquear – Desbloquear usuário\n"
@@ -414,12 +419,18 @@ ESCOLHENDO_DISPLAY, DIGITANDO_NICK = range(2)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
+    perfil_antigo = await pool.fetchrow(
+        "SELECT 1 FROM usuarios WHERE user_id = $1",
+        user.id
+    )
+
     # 1) Verifica se já existe registro; só insere uma vez
     await obter_ou_criar_usuario_db(
         user_id=user.id,
         username=user.username or "vazio",
         first_name=user.first_name or "vazio",
-        last_name=user.last_name or "vazio"
+        last_name=user.last_name or "vazio",
+        via_start=True
     )
 
     # 2) Pergunta como ele quer aparecer
@@ -1077,8 +1088,8 @@ async def historico_usuario(update: Update, context: CallbackContext):
         target_id or 'global',
         page
     )
-
 async def callback_historico(update: Update, context: CallbackContext):
+
     query = update.callback_query
     await query.answer()
 
@@ -1287,6 +1298,156 @@ async def callback_listar_usuarios(update: Update, context: ContextTypes.DEFAULT
     # Reaproveita a mesma função para editar a mensagem
     await listar_usuarios(update, context)
 
+
+from telegram import Update
+from telegram.ext import ContextTypes
+
+
+async def estatisticas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando que exibe estatísticas agregadas “no tempo todo” e “hoje”:
+
+    ➤ No tempo todo (All time):
+      1. Total de usuários cadastrados
+      2. Usuários que já interagiram (receberam pelo menos 1 ponto)
+      3. Usuários que já atingiram algum nível (nivel_atingido > 0)
+      4. Total de pontos distribuídos
+      5. Total de pontos removidos
+
+    ➤ Hoje:
+      1. Novos usuários cadastrados hoje
+      2. Usuários que interagiram (pontuados) hoje
+      3. Usuários que atingiram nível hoje
+      4. Total de pontos distribuídos hoje
+      5. Total de pontos removidos hoje
+    """
+    try:
+        hoje = hoje_sp()  # data de hoje em America/Sao_Paulo
+
+        # === NO TEMPO T'ODO ===
+
+        # Total de usuários cadastrados (all time)
+        total_usuarios = await pool.fetchval(
+            "SELECT COUNT(*) FROM usuarios"
+        )
+
+        # Usuários que já atingiram algum nível (nivel_atingido > 0)
+        usuarios_nivel_total = await pool.fetchval(
+            "SELECT COUNT(*) FROM usuarios WHERE nivel_atingido > 0"
+        )
+
+        # Total de pontos distribuídos (soma de pontos positivos, all time)
+        pontos_distribuidos_total = await pool.fetchval(
+            "SELECT COALESCE(SUM(pontos), 0) FROM historico_pontos WHERE pontos > 0"
+        )
+
+        # 5) Total de pontos removidos (soma absoluta de pontos negativos, all time)
+        pontos_removidos_total = await pool.fetchval(
+            "SELECT COALESCE(SUM(ABS(pontos)), 0) FROM historico_pontos WHERE pontos < 0"
+        )
+
+        # === HOJE ===
+
+        # Novos usuários cadastrados hoje (DATE(inserido_em) = hoje)
+        inseridos_hoje = await pool.fetchval(
+            "SELECT COUNT(*) FROM usuarios WHERE DATE(inserido_em) = $1",
+            hoje
+        )
+
+        # Usuários que interagiram (pontuados) hoje
+        interagiram_hoje = await pool.fetchval(
+            """
+            SELECT COUNT(DISTINCT user_id)
+              FROM historico_pontos
+             WHERE pontos > 0
+               AND DATE(data) = $1
+            """,
+            hoje
+        )
+
+        # Usuários que atingiram nível hoje
+        #   -> Para cada user_id com soma positiva hoje, checar se cruzou um limiar de NIVEIS_BRINDES
+        rows_dia = await pool.fetch(
+            """
+            SELECT user_id, SUM(pontos) AS soma_dia
+              FROM historico_pontos
+             WHERE pontos > 0
+               AND DATE(data) = $1
+          GROUP BY user_id
+            """,
+            hoje
+        )
+
+        niveis = sorted(NIVEIS_BRINDES.keys())  # [200, 300, 500, 750, 1000]
+        usuarios_nivel_hoje = 0
+
+        for rec in rows_dia:
+            uid = rec["user_id"]
+            soma_dia = rec["soma_dia"] or 0
+
+            soma_antes = await pool.fetchval(
+                """
+                SELECT COALESCE(SUM(pontos), 0)
+                  FROM historico_pontos
+                 WHERE user_id = $1
+                   AND DATE(data) < $2
+                """,
+                uid,
+                hoje
+            )
+
+            total_hoje = soma_antes + soma_dia
+
+            # Verifica se cruzou algum limiar hoje
+            cruzou = any(soma_antes < limiar <= total_hoje for limiar in niveis)
+            if cruzou:
+                usuarios_nivel_hoje += 1
+
+        # Total de pontos distribuídos hoje (soma de pontos positivos)
+        pontos_distribuidos_hoje = await pool.fetchval(
+            """
+            SELECT COALESCE(SUM(pontos), 0)
+              FROM historico_pontos
+             WHERE pontos > 0
+               AND DATE(data) = $1
+            """,
+            hoje
+        )
+
+        # Total de pontos removidos hoje (soma absoluta de pontos negativos)
+        pontos_removidos_hoje = await pool.fetchval(
+            """
+            SELECT COALESCE(SUM(ABS(pontos)), 0)
+              FROM historico_pontos
+             WHERE pontos < 0
+               AND DATE(data) = $1
+            """,
+            hoje
+        )
+
+        # Monta mensagem final
+        texto = (
+            "📊 *Estatísticas de Usuários*\n\n"
+            "*No tempo todo:*\n"
+            f"• Total de usuários cadastrados: *{total_usuarios}*\n"
+            f"• Usuários que já atingiram nível: *{usuarios_nivel_total}*\n"
+            f"• Total de pontos distribuídos: *{pontos_distribuidos_total}*\n"
+            f"• Total de pontos removidos: *{pontos_removidos_total}*\n\n"
+            "*Hoje \\({hoje_str}\\):*\n"
+            f"• Novos usuários cadastrados: *{inseridos_hoje}*\n"
+            f"• Usuários que interagiram hoje: *{interagiram_hoje}*\n"
+            f"• Usuários que atingiram nível hoje: *{usuarios_nivel_hoje}*\n"
+            f"• Pontos distribuídos hoje: *{pontos_distribuidos_hoje}*\n"
+            f"• Pontos removidos hoje: *{pontos_removidos_hoje}*"
+        ).replace("{hoje_str}", hoje.strftime("%d/%m/%Y"))
+
+        await update.message.reply_text(texto, parse_mode="MarkdownV2")
+
+    except Exception as e:
+        logger.error(f"Erro ao gerar estatísticas: {e}")
+        await update.message.reply_text("❌ Não foi possível gerar as estatísticas no momento")
+
+
 async def on_startup(app):
     global ADMINS
     await init_db_pool()
@@ -1390,9 +1551,9 @@ async def main():
     app.add_handler(
         CommandHandler("listar_usuarios", listar_usuarios)
     )
-    # app.add_handler(
-    #     CommandHandler("total_usuarios", total_usuarios)
-    # )
+    app.add_handler(
+        CommandHandler("estatisticas", estatisticas)
+    )
 
     # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
