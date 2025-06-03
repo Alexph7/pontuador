@@ -839,10 +839,10 @@ async def tratar_presenca(update, context):
     ts = reg.get('ultima_interacao') if reg else None  # datetime.datetime ou None
     ultima_data = None if ts is None else ts.date() if hasattr(ts, 'date') else ts
     if ultima_data is None or ultima_data != hoje_sp():
-        # 3.1) Atribui o ponto
+        # Atribui o ponto
         await atualizar_pontos(user.id, 1, 'Presença diária', context.bot)
 
-        # 3.2) Registra timestamp completo de agora
+        # Registra timestamp completo de agora
         from datetime import datetime
         from zoneinfo import ZoneInfo
         agora = datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
