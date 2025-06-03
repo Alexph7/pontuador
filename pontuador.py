@@ -34,6 +34,17 @@ def hoje_data_sp():
 def hoje_hora_sp():
     return datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
 
+def format_dt_sp(dt: datetime | None, fmt: str = "%d/%m/%Y %H:%M:%S") -> str:
+    """
+    Converte um datetime (UTC ou outro fuso) para America/Sao_Paulo
+    e retorna no formato especificado. Se dt for None, retorna "N/A".
+    """
+    if not dt:
+        return "N/A"
+    sp = dt.astimezone(ZoneInfo("America/Sao_Paulo"))
+    return sp.strftime(fmt)
+
+
 pool: asyncpg.Pool | None = None
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -545,11 +556,7 @@ async def listar_via_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sobrenome = u["last_name"] or ""
             username = f"@{u['username']}" if u["username"] != "vazio" else "nao tem"
             inserido_em = u["inserido_em"]
-            if inserido_em:
-                data_sp = inserido_em.astimezone(ZoneInfo("America/Sao_Paulo"))
-                data_registro = data_sp.strftime("%d/%m/%Y %H:%M:%S")
-            else:
-                data_registro = "N/A"
+            data_registro = format_dt_sp(u["inserido_em"], "%d/%m/%Y %H:%M:%S")
 
             linhas.append(
                 f"• Data: {data_registro} ID: `{u['user_id']}` Nome: {nome}  Sobrenome: {sobrenome} Username: {username}".strip()
@@ -823,7 +830,7 @@ async def historico(update: Update, context: CallbackContext):
         await update.message.reply_text("🗒️ Nenhum registro de histórico encontrado.")
         return
     lines = [
-        f" {r['data'].strftime('%d/%m %H:%M')}: {r['pontos']} pts - {r['motivo']}"
+        f" {format_dt_sp(r['data'], '%d/%m %H:%M')}: {r['pontos']} pts - {r['motivo']}"
         for r in rows
     ]
     await update.message.reply_text("🗒️ Seu histórico de pontos:\n\n" + "\n\n".join(lines))
@@ -1063,7 +1070,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
 
     lines = [header]
     for r in rows:
-        ts_str = r["inserido_em"].strftime("%d/%m %H:%M")
+        ts_str = format_dt_sp(r["inserido_em"], "%d/%m %H:%M")
         prefix = r["status"]  # 'Inserido' ou 'Atualizado'
         user_part = f"`{r['user_id']}` " if target_id is None else ""
         lines.append(
@@ -1157,6 +1164,8 @@ async def historico_usuario(update: Update, context: CallbackContext):
         target_id or 'global',
         page
     )
+
+
 async def callback_historico(update: Update, context: CallbackContext):
 
     query = update.callback_query
