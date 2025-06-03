@@ -601,6 +601,16 @@ async def meus_pontos(update: Update, context: CallbackContext):
     """
     user = update.effective_user
 
+    perfil = await pool.fetchrow(
+        "SELECT display_choice, ultima_interacao FROM usuarios WHERE user_id = $1", user.id
+    )
+
+    if perfil is None:
+        await update.message.reply_text(
+            "⚠️ Você ainda não está cadastrado. Use /start para se cadastrar."
+        )
+        return
+
     try:
         perfil = await obter_ou_criar_usuario_db(
             user_id=user.id,
@@ -608,6 +618,25 @@ async def meus_pontos(update: Update, context: CallbackContext):
             first_name=user.first_name or "vazio",
             last_name=user.last_name or "vazio",
         )
+
+        ts = perfil.get("ultima_interacao")
+        if ts is None:
+            ultima_data = None
+        elif isinstance(ts, datetime):
+            ultima_data = ts.date()
+        elif isinstance(ts, date):
+            ultima_data = ts
+        else:
+            ultima_data = None
+
+        if ultima_data is None or ultima_data != hoje_data_sp():
+            await atualizar_pontos(user.id, 1, "Presença diária (/meus_pontos)", context.bot)
+            agora_sp = datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
+            await pool.execute(
+                "UPDATE usuarios SET ultima_interacao = $1 WHERE user_id = $2::bigint",
+                agora_sp, user.id
+            )
+            logger.info(f"[PRESENÇA /meus_pontos] 1 ponto para {user.id} em {hoje_data_sp()}")
 
         pontos = perfil['pontos']
         nivel = perfil['nivel_atingido']
@@ -626,7 +655,7 @@ async def meus_pontos(update: Update, context: CallbackContext):
         await update.message.reply_text(
             "❌ Desculpe, tivemos um problema ao acessar as suas informações. "
             "Tente novamente mais tarde. Se o problema persistir contate o suporte."
-    )
+            )
 
 async def como_ganhar(update: Update, context: CallbackContext):
     # Ordena os brindes por nível de pontos
@@ -839,9 +868,8 @@ async def historico(update: Update, context: CallbackContext):
 async def ranking_top10(update: Update, context: CallbackContext):
     user = update.effective_user
 
-    # 🔍 1) Verifica se o próprio usuário pode ver o ranking
     perfil = await pool.fetchrow(
-        "SELECT display_choice FROM usuarios WHERE user_id = $1", user.id
+        "SELECT display_choice, ultima_interacao FROM usuarios WHERE user_id = $1", user.id
     )
 
     if perfil is None:
@@ -849,6 +877,25 @@ async def ranking_top10(update: Update, context: CallbackContext):
             "⚠️ Você ainda não está cadastrado. Use /start para se cadastrar."
         )
         return
+
+    ts = perfil["ultima_interacao"]
+    if ts is None:
+        ultima_data = None
+    elif isinstance(ts, datetime):
+        ultima_data = ts.date()
+    elif isinstance(ts, date):
+        ultima_data = ts
+    else:
+        ultima_data = None
+
+    if ultima_data is None or ultima_data != hoje_data_sp():
+        await atualizar_pontos(user.id, 1, "Presença diária (/ranking_top10)", context.bot)
+        agora_sp = datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
+        await pool.execute(
+            "UPDATE usuarios SET ultima_interacao = $1 WHERE user_id = $2::bigint",
+            agora_sp, user.id
+        )
+        logger.info(f"[PRESENÇA /ranking_top10] 1 ponto para {user.id} em {hoje_data_sp()}")
 
     if perfil["display_choice"] == "indefinido":
         await update.message.reply_text(
@@ -1615,6 +1662,7 @@ async def main():
             allow_reentry = True,
         )
     )
+
 
     app.add_handler(CommandHandler('admin', admin, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('meus_pontos', meus_pontos))
