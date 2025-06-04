@@ -942,24 +942,23 @@ async def tratar_presenca(update, context):
     if user is None or user.is_bot:
         return
 
-    # 1) Garante que exista o registro (não pontua aqui)
-    await adicionar_usuario_db(
+    # 1) Garante que exista — sem alterar display_choice/nickname já configurados
+    await obter_ou_criar_usuario_db(
         user_id=user.id,
         username=user.username or "vazio",
         first_name=user.first_name or "vazio",
         last_name=user.last_name or "vazio",
-        display_choice="indefinido",
-        nickname="sem nick"
+        via_start=False
     )
 
-    # 2) Checa se já ganhou ponto hoje baseado em ultima_interacao
+    # 2) Agora verifica presença diária via ultima_interacao (como ajustamos antes)
     hoje = hoje_data_sp()
     ultima = await pool.fetchval(
         "SELECT ultima_interacao FROM usuarios WHERE user_id = $1",
         user.id
     )
     if ultima is None or ultima != hoje:
-        # Atribui 1 ponto e atualiza ultima_interacao
+        # Dá 1 ponto e atualiza ultima_interacao
         await atualizar_pontos(user.id, 1, 'Presença diária', context.bot)
         agora = datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
         await pool.execute(
