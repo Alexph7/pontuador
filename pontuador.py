@@ -620,9 +620,7 @@ async def meus_pontos(update: Update, context: CallbackContext):
         )
 
         ts = perfil.get("ultima_interacao")
-        if ts is None:
-            ultima_data = None
-        elif isinstance(ts, datetime):
+        if isinstance(ts, datetime):
             ultima_data = ts.date()
         elif isinstance(ts, date):
             ultima_data = ts
@@ -630,6 +628,7 @@ async def meus_pontos(update: Update, context: CallbackContext):
             ultima_data = None
 
         if ultima_data is None or ultima_data != hoje_data_sp():
+            # só aqui dá ponto e atualiza ultima_interacao
             await atualizar_pontos(user.id, 1, "Presença diária (/meus_pontos)", context.bot)
             agora_sp = datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
             await pool.execute(
@@ -879,14 +878,10 @@ async def ranking_top10(update: Update, context: CallbackContext):
         return
 
     ts = perfil["ultima_interacao"]
-    if ts is None:
-        ultima_data = None
-    elif isinstance(ts, datetime):
+    if isinstance(ts, datetime):
         ultima_data = ts.date()
-    elif isinstance(ts, date):
-        ultima_data = ts
     else:
-        ultima_data = None
+        ultima_data = ts  # se for date
 
     if ultima_data is None or ultima_data != hoje_data_sp():
         await atualizar_pontos(user.id, 1, "Presença diária (/ranking_top10)", context.bot)
@@ -944,11 +939,10 @@ async def ranking_top10(update: Update, context: CallbackContext):
 
 async def tratar_presenca(update, context):
     user = update.effective_user
-
     if user is None or user.is_bot:
         return
 
-    # 1) Garante que exista sem logar toda vez
+    # 1) Garante que exista o registro (não pontua aqui)
     await adicionar_usuario_db(
         user_id=user.id,
         username=user.username or "vazio",
@@ -958,30 +952,20 @@ async def tratar_presenca(update, context):
         nickname="sem nick"
     )
 
-    # 2) Atualiza presença (sem relação com pontos)
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    agora = datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
-    await pool.execute(
-        "UPDATE usuarios SET ultima_interacao = $1 WHERE user_id = $2::bigint",
-        agora, user.id
-    )
-
-    # 3) Verifica se já pontuou hoje por presença
+    # 2) Checa se já ganhou ponto hoje baseado em ultima_interacao
     hoje = hoje_data_sp()
-
-    ja_pontuou = await pool.fetchval(
-        """
-        SELECT 1 FROM historico_pontos
-        WHERE user_id = $1
-          AND DATE(data) = $2
-          AND motivo = 'Presença diária'
-        """,
-        user.id, hoje
+    ultima = await pool.fetchval(
+        "SELECT ultima_interacao FROM usuarios WHERE user_id = $1",
+        user.id
     )
-
-    if not ja_pontuou:
+    if ultima is None or ultima != hoje:
+        # Atribui 1 ponto e atualiza ultima_interacao
         await atualizar_pontos(user.id, 1, 'Presença diária', context.bot)
+        agora = datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
+        await pool.execute(
+            "UPDATE usuarios SET ultima_interacao = $1 WHERE user_id = $2::bigint",
+            agora, user.id
+        )
         logger.info(f"[PRESENÇA] 1 ponto para {user.id} em {hoje}")
 
 
