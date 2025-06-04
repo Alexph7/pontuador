@@ -449,7 +449,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("3️⃣ Ficar anônimo",                  callback_data="set:anonymous")],
     ])
     await update.message.reply_text(
-        f"🤖 Bem-vindo, {user.first_name}! Ao Prosseguir voce aceita os termos de uso do bot, Para começar, caso você alcance o Ranking, como você gostaria de aparecer?",
+        f"🤖 Bem-vindo, {user.first_name}! Ao Prosseguir voce aceita os termos de uso do bot \n"
+        f" Para começar, caso você alcance o Ranking, como você gostaria de aparecer?",
         reply_markup=keyboard
             )
     return ESCOLHENDO_DISPLAY
@@ -595,21 +596,7 @@ async def paginacao_via_start(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def meus_pontos(update: Update, context: CallbackContext):
-    """
-    Exibe ao usuário seus pontos e nível atual,
-    tratando possíveis falhas de conexão ao banco.
-    """
     user = update.effective_user
-
-    perfil = await pool.fetchrow(
-        "SELECT display_choice, ultima_interacao FROM usuarios WHERE user_id = $1", user.id
-    )
-
-    if perfil is None:
-        await update.message.reply_text(
-            "⚠️ Você ainda não está cadastrado. Use /start para se cadastrar."
-        )
-        return
 
     try:
         perfil = await obter_ou_criar_usuario_db(
@@ -628,7 +615,6 @@ async def meus_pontos(update: Update, context: CallbackContext):
             ultima_data = None
 
         if ultima_data is None or ultima_data != hoje_data_sp():
-            # só aqui dá ponto e atualiza ultima_interacao
             await atualizar_pontos(user.id, 1, "Presença diária (/meus_pontos)", context.bot)
             agora_sp = datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
             await pool.execute(
@@ -643,7 +629,7 @@ async def meus_pontos(update: Update, context: CallbackContext):
         if nivel == 0:
             nivel_texto = "rumo ao Nível 1"
         else:
-            nivel_texto = f"Eba ja alcançou brinde de Nível {nivel}"
+            nivel_texto = f"Eba! Já alcançou brinde de Nível {nivel}"
 
         await update.message.reply_text(
             f"🎉 Você tem {pontos} pontos {nivel_texto}."
@@ -653,8 +639,9 @@ async def meus_pontos(update: Update, context: CallbackContext):
         logger.error(f"Erro ao buscar pontos do usuário {user.id}: {e}", exc_info=True)
         await update.message.reply_text(
             "❌ Desculpe, tivemos um problema ao acessar as suas informações. "
-            "Tente novamente mais tarde. Se o problema persistir contate o suporte."
-            )
+            "Tente novamente mais tarde. Se o problema persistir, contate o suporte."
+        )
+
 
 async def como_ganhar(update: Update, context: CallbackContext):
     # Ordena os brindes por nível de pontos
@@ -663,7 +650,7 @@ async def como_ganhar(update: Update, context: CallbackContext):
         for pontos, descricao in sorted(NIVEIS_BRINDES.items())
     )
     await update.message.reply_text(
-        "🎯Pontos Válidos a Partir de 1 de Maio de 2025"
+        "🎯Pontos Válidos a Partir de 1 de Maio de 2025\n"
         "  Você Pode Ganha Pontos Por:\n"
         "• Compras por ID em videos.\n"
         "• Até 1 comentário diario em grupos ou interação com bot\n"
@@ -868,21 +855,29 @@ async def historico(update: Update, context: CallbackContext):
 async def ranking_top10(update: Update, context: CallbackContext):
     user = update.effective_user
 
-    perfil = await pool.fetchrow(
-        "SELECT display_choice, ultima_interacao FROM usuarios WHERE user_id = $1", user.id
+    perfil = await obter_ou_criar_usuario_db(
+        user_id=user.id,
+        username=user.username or "vazio",
+        first_name=user.first_name or "vazio",
+        last_name=user.last_name or "vazio",
     )
 
-    if perfil is None:
-        await update.message.reply_text(
-            "⚠️ Você ainda não está cadastrado. Use /start para se cadastrar."
-        )
-        return
+    if update.effective_chat.type == "private":
+        if perfil["display_choice"] == "indefinido":
+            await update.message.reply_text(
+                "⚠️ Para acessar o ranking, primeiro escolha como seu nome deve aparecer.\n\n"
+                "Use /start para fazer essa escolha."
+            )
+            return
 
+    # Checa presença diária
     ts = perfil["ultima_interacao"]
     if isinstance(ts, datetime):
         ultima_data = ts.date()
+    elif isinstance(ts, date):
+        ultima_data = ts
     else:
-        ultima_data = ts  # se for date
+        ultima_data = None
 
     if ultima_data is None or ultima_data != hoje_data_sp():
         await atualizar_pontos(user.id, 1, "Presença diária (/ranking_top10)", context.bot)
@@ -893,14 +888,7 @@ async def ranking_top10(update: Update, context: CallbackContext):
         )
         logger.info(f"[PRESENÇA /ranking_top10] 1 ponto para {user.id} em {hoje_data_sp()}")
 
-    if perfil["display_choice"] == "indefinido":
-        await update.message.reply_text(
-            "⚠️ Para acessar o ranking, primeiro escolha como seu nome deve aparecer.\n\n"
-            "Use /start para fazer essa escolha."
-        )
-        return
-
-    # 🏅 2) Busca os top 10 que já escolheram como aparecer
+    # Busca top 10
     top = await pool.fetch(
         """
         SELECT
@@ -921,7 +909,6 @@ async def ranking_top10(update: Update, context: CallbackContext):
         await update.message.reply_text("🏅 Nenhum usuário cadastrado no ranking.")
         return
 
-    # 🏆 3) Monta o texto com base na escolha de display de cada um
     linhas = ["🏅 Top 10 de pontos:"]
     for i, u in enumerate(top):
         choice = u["display_choice"]
