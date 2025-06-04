@@ -945,35 +945,44 @@ async def ranking_top10(update: Update, context: CallbackContext):
 async def tratar_presenca(update, context):
     user = update.effective_user
 
+    if user is None or user.is_bot:
+        return
+
     # 1) Garante que exista sem logar toda vez
-    await adicionar_usuario_db(user_id=user.id, username=user.username or "vazio",
-                               first_name=user.first_name or "vazio", last_name=user.last_name or "vazio",
-                               display_choice="indefinido", nickname="sem nick")
-    # 2) Busca registro completo
-    reg = await obter_ou_criar_usuario_db(
+    await adicionar_usuario_db(
         user_id=user.id,
         username=user.username or "vazio",
         first_name=user.first_name or "vazio",
-        last_name=user.last_name or "vazio"
+        last_name=user.last_name or "vazio",
+        display_choice="indefinido",
+        nickname="sem nick"
     )
 
-    # 3) Dá pontuação uma única vez por dia,
-    #    extraindo só a data do último timestamp
-    ts = reg.get('ultima_interacao') if reg else None  # datetime.datetime ou None
-    ultima_data = None if ts is None else ts.date() if hasattr(ts, 'date') else ts
-    if ultima_data is None or ultima_data != hoje_data_sp():
-        # Atribui o ponto
-        await atualizar_pontos(user.id, 1, 'Presença diária', context.bot)
+    # 2) Atualiza presença (sem relação com pontos)
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    agora = datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
+    await pool.execute(
+        "UPDATE usuarios SET ultima_interacao = $1 WHERE user_id = $2::bigint",
+        agora, user.id
+    )
 
-        # Registra timestamp completo de agora
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
-        agora = datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
-        await pool.execute(
-            "UPDATE usuarios SET ultima_interacao = $1 WHERE user_id = $2::bigint",
-            agora, user.id
-        )
-        logger.info(f"[PRESENÇA] 1 ponto para {user.id} em {hoje_data_sp()}")
+    # 3) Verifica se já pontuou hoje por presença
+    hoje = hoje_data_sp()
+
+    ja_pontuou = await pool.fetchval(
+        """
+        SELECT 1 FROM historico_pontos
+        WHERE user_id = $1
+          AND DATE(data) = $2
+          AND motivo = 'Presença diária'
+        """,
+        user.id, hoje
+    )
+
+    if not ja_pontuou:
+        await atualizar_pontos(user.id, 1, 'Presença diária', context.bot)
+        logger.info(f"[PRESENÇA] 1 ponto para {user.id} em {hoje}")
 
 
 async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
@@ -984,9 +993,6 @@ async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
-
-# No topo do módulo, defina um separador para os logs agregados:
-DELIM = '|'  # caractere que não aparece em usernames/nomes
 
 async def historico_usuario(update: Update, context: CallbackContext):
     # 0) Autenticação de admin
@@ -1332,11 +1338,11 @@ async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # 3) Buscar só os usuários daquela página
-    offset = (page - 1) * PAGE_SIZE
+    offset = (page - 1) * PAGE_SIZE_LISTAR
     try:
         rows = await pool.fetch(
             "SELECT user_id, first_name, username FROM usuarios ORDER BY user_id LIMIT $1 OFFSET $2",
-            PAGE_SIZE,
+            PAGE_SIZE_LISTAR,
             offset
         )
     except Exception as e:
