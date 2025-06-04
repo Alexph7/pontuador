@@ -449,7 +449,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("3️⃣ Ficar anônimo",                  callback_data="set:anonymous")],
     ])
     await update.message.reply_text(
-        f"🤖 Bem-vindo, {user.first_name}! Para começar, caso você alcance o Ranking, como você gostaria de aparecer?",
+        f"🤖 Bem-vindo, {user.first_name}! Ao Prosseguir voce aceita os termos de uso do bot, Para começar, caso você alcance o Ranking, como você gostaria de aparecer?",
         reply_markup=keyboard
             )
     return ESCOLHENDO_DISPLAY
@@ -663,7 +663,8 @@ async def como_ganhar(update: Update, context: CallbackContext):
         for pontos, descricao in sorted(NIVEIS_BRINDES.items())
     )
     await update.message.reply_text(
-        "🎯Você Pode Ganha Pontos Por:\n"
+        "🎯Pontos Válidos a Partir de 1 de Maio de 2025"
+        "  Você Pode Ganha Pontos Por:\n"
         "• Compras por ID em videos.\n"
         "• Até 1 comentário diario em grupos ou interação com bot\n"
         "• Muito cedo, mais opções de como ganhar pontos aparecerá em breve. \n\n"
