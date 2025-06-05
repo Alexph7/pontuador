@@ -899,7 +899,6 @@ async def ranking_top10(update: Update, context: CallbackContext):
             nickname,
             pontos
         FROM usuarios
-        WHERE display_choice != 'indefinido'
         ORDER BY pontos DESC
         LIMIT 10
         """
