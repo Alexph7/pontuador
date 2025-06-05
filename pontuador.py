@@ -449,7 +449,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("3️⃣ Ficar anônimo",                  callback_data="set:anonymous")],
     ])
     await update.message.reply_text(
-        f"🤖 Bem-vindo, {user.first_name}! Ao Prosseguir voce aceita os termos de uso do bot \n"
+        f"🤖 Bem-vindo, {user.first_name}! Ao Prosseguir você aceita os termos de uso do bot \n"
         f" Para começar, caso você alcance o Ranking, como você gostaria de aparecer?",
         reply_markup=keyboard
             )
@@ -472,7 +472,7 @@ async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TY
             display_choice="first_name",
             nickname="sem nick",
         )
-        await query.edit_message_text("👍 Ok, você aparecerá com seu nome normal, para prosseguir escolha uma opção no menú ao lado.")
+        await query.edit_message_text("👍 Ok, você aparecerá com seu nome normal, para prosseguir escolha uma opção no menu ao lado.")
         return ConversationHandler.END
 
     # 2️⃣ Se for “nickname”, pede o nick e vai pro estado DIGITANDO_NICK
@@ -482,15 +482,9 @@ async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TY
 
     # 3️⃣ Se for “anonymous”, gera inicial com fallback zero e salva
     if escolha == "anonymous":
-        # tenta first_name, senão username, senão '0'
-        if user.first_name and user.first_name.strip():
-            inicial = user.first_name.strip()[0]
-        elif user.username and user.username.strip():
-            inicial = user.username.strip()[0]
-        else:
-            inicial = "0"
-
-        anon = f"{inicial.upper()}****"
+        nome_base = (user.first_name or user.username or "0").strip()
+        inicial = nome_base[0].upper() if nome_base else "0"
+        anon = f"{inicial}****"
 
         await adicionar_usuario_db(
             user_id=user.id,
@@ -498,7 +492,7 @@ async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TY
             first_name=user.first_name or "vazio",
             last_name=user.last_name or "vazio",
             display_choice="anonymous",
-            nickname=anon,  # salva “0*****” ou “A*****”
+            nickname=anon,
         )
 
         await query.edit_message_text(
@@ -524,7 +518,7 @@ async def receber_nickname(update: Update, context: ContextTypes.DEFAULT_TYPE):
         display_choice="nickname",
         nickname=nick,
     )
-    await update.message.reply_text(f"✅ Nickname salvo: '' **{nick}** '', agora para prosseguir escolha uma opção no meu ao lado", parse_mode="Markdown")
+    await update.message.reply_text(f"✅ Nickname salvo: '' **{nick}** '', agora para prosseguir escolha uma opção no menu ao lado", parse_mode="Markdown")
     return ConversationHandler.END
 
 
