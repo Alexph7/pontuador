@@ -909,6 +909,8 @@ async def ranking_top10(update: Update, context: CallbackContext):
             display = u["first_name"] or u["username"] or "Usuário"
         elif choice in ("nickname", "anonymous"):
             display = u["nickname"] or u["username"] or "Usuário"
+        elif choice == "indefinido":
+            display = "🕓 Esperando interação"
         else:
             display = u["username"] or u["first_name"] or "Usuário"
 
