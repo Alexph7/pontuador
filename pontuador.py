@@ -910,11 +910,11 @@ async def ranking_top10(update: Update, context: CallbackContext):
         elif choice in ("nickname", "anonymous"):
             display = u["nickname"] or u["username"] or "Usuário"
         elif choice == "indefinido":
-            display = "🕓 Esperando interação"
+            display = "Esperando interação"
         else:
             display = u["username"] or u["first_name"] or "Usuário"
 
-        linhas.append(f"{i + 1}. {display.upper()} – {u['pontos']} pts")
+        linhas.append(f"{i + 1}. {display} - {u['pontos']} pts")
 
     texto = "\n\n".join(linhas)
     await update.message.reply_text(texto)
