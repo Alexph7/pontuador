@@ -31,8 +31,11 @@ from telegram.ext import (
 
 def hoje_data_sp():
     return datetime.now(tz=ZoneInfo("America/Sao_Paulo")).date()
+
+
 def hoje_hora_sp():
     return datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
+
 
 def format_dt_sp(dt: datetime | None, fmt: str = "%d/%m/%Y %H:%M:%S") -> str:
     """
@@ -77,18 +80,19 @@ NIVEIS_BRINDES = {
     300: "🎁 Brinde nível 2",
     500: "🎁 Brinde nível 3",
     750: "🎁 Brinde nível 4",
-   1000: "🎁 Brinde nível 5"
+    1000: "🎁 Brinde nível 5"
 }
 
-#Estados da conversa
+# Estados da conversa
 (ADMIN_SENHA, ESPERANDO_SUPORTE, ADD_PONTOS_POR_ID, ADD_PONTOS_QTD, ADD_PONTOS_MOTIVO, DEL_PONTOS_ID, DEL_PONTOS_QTD,
  DEL_PONTOS_MOTIVO, ADD_ADMIN_ID, REM_ADMIN_ID) = range(10)
 
-TEMPO_LIMITE_BUSCA = 10          # Tempo máximo (em segundos) para consulta
+TEMPO_LIMITE_BUSCA = 10  # Tempo máximo (em segundos) para consulta
+
 
 async def init_db_pool():
     global pool, ADMINS
-    pool = await asyncpg.create_pool(dsn=DATABASE_URL,min_size=1,max_size=10)
+    pool = await asyncpg.create_pool(dsn=DATABASE_URL, min_size=1, max_size=10)
     async with pool.acquire() as conn:
         # Criação de tabelas se não existirem
         await conn.execute("""
@@ -115,7 +119,7 @@ async def init_db_pool():
             motivo TEXT NOT NULL DEFAULT 'Não Especificado',
             data TIMESTAMPTZ  DEFAULT CURRENT_TIMESTAMP
         );
-     
+
        CREATE TABLE IF NOT EXISTS palavras_proibidas (
             id SERIAL PRIMARY KEY,
             palavra TEXT UNIQUE NOT NULL
@@ -140,19 +144,21 @@ async def init_db_pool():
         """)
     ADMINS = await carregar_admins_db()
 
+
 # --- Helpers de usuário (asyncpg) ---
 PAGE_SIZE = 16
 MAX_MESSAGE_LENGTH = 4000
 
+
 async def adicionar_usuario_db(
-    user_id: int,
-    username: str = "vazio",
-    first_name: str = "vazio",
-    last_name: str = "vazio",
-    display_choice: str = "indefinido",
-    nickname: str = "sem nick",
-    via_start: bool = False,
-    pool_override: asyncpg.Pool | None = None,
+        user_id: int,
+        username: str = "vazio",
+        first_name: str = "vazio",
+        last_name: str = "vazio",
+        display_choice: str = "indefinido",
+        nickname: str = "sem nick",
+        via_start: bool = False,
+        pool_override: asyncpg.Pool | None = None,
 ):
     pg = pool_override or pool
     async with pg.acquire() as conn:
@@ -259,11 +265,11 @@ async def adicionar_usuario_db(
 
 
 async def obter_ou_criar_usuario_db(
-    user_id: int,
-    username: str,
-    first_name: str,
-    last_name: str,
-    via_start: bool = False
+        user_id: int,
+        username: str,
+        first_name: str,
+        last_name: str,
+        via_start: bool = False
 ):
     perfil = await pool.fetchrow("SELECT * FROM usuarios WHERE user_id = $1", user_id)
 
@@ -282,6 +288,7 @@ async def obter_ou_criar_usuario_db(
     # Agora busca de novo e retorna
     perfil = await pool.fetchrow("SELECT * FROM usuarios WHERE user_id = $1", user_id)
     return perfil
+
 
 async def registrar_historico_db(user_id: int, pontos: int, motivo: str | None = None):
     """
@@ -302,6 +309,7 @@ def escape_markdown_v2(text: str) -> str:
     """
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
+
 
 # Mensagem de Mural de Entrada
 async def setup_bot_description(app):
@@ -385,7 +393,7 @@ async def tratar_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if senha == str(ADMIN_PASSWORD):
         await adicionar_admin_db(user_id)  # Salva no banco se quiser persistência
-        ADMINS.add(user_id)                # Salva na memória enquanto o bot roda
+        ADMINS.add(user_id)  # Salva na memória enquanto o bot roda
         await update.message.reply_text(ADMIN_MENU)
         return ConversationHandler.END
     else:
@@ -410,6 +418,7 @@ async def adicionar_admin_db(user_id: int):
         )
     except Exception as e:
         logger.error(f"Erro ao adicionar admin no banco: {e}")
+
 
 async def remover_admin_db(user_id: int):
     try:
@@ -445,14 +454,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2) Pergunta como ele quer aparecer
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("1️⃣ Mostrar nome do jeito que está", callback_data="set:first_name")],
-        [InlineKeyboardButton("2️⃣ Escolher um Nick/Apelido",       callback_data="set:nickname")],
-        [InlineKeyboardButton("3️⃣ Ficar anônimo",                  callback_data="set:anonymous")],
+        [InlineKeyboardButton("2️⃣ Escolher um Nick/Apelido", callback_data="set:nickname")],
+        [InlineKeyboardButton("3️⃣ Ficar anônimo", callback_data="set:anonymous")],
     ])
     await update.message.reply_text(
         f"🤖 Bem-vindo, {user.first_name}! Ao Prosseguir você aceita os termos de uso do bot \n"
         f" Para começar, caso você alcance o Ranking, como você gostaria de aparecer?",
         reply_markup=keyboard
-            )
+    )
     return ESCOLHENDO_DISPLAY
 
 
@@ -472,7 +481,8 @@ async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TY
             display_choice="first_name",
             nickname="sem nick",
         )
-        await query.edit_message_text("👍 Ok, você aparecerá com seu nome normal, para prosseguir escolha uma opção no menu ao lado.")
+        await query.edit_message_text(
+            "👍 Ok, você aparecerá com seu nome normal, para prosseguir escolha uma opção no menu ao lado.")
         return ConversationHandler.END
 
     # 2️⃣ Se for “nickname”, pede o nick e vai pro estado DIGITANDO_NICK
@@ -518,11 +528,14 @@ async def receber_nickname(update: Update, context: ContextTypes.DEFAULT_TYPE):
         display_choice="nickname",
         nickname=nick,
     )
-    await update.message.reply_text(f"✅ Nickname salvo: '' **{nick}** '', agora para prosseguir escolha uma opção no menu ao lado", parse_mode="Markdown")
+    await update.message.reply_text(
+        f"✅ Nickname salvo: '' **{nick}** '', agora para prosseguir escolha uma opção no menu ao lado",
+        parse_mode="Markdown")
     return ConversationHandler.END
 
 
 USUARIOS_POR_PAGINA = 20
+
 
 async def listar_via_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     page = int(context.args[0]) if context.args and context.args[0].isdigit() else 1
@@ -562,9 +575,9 @@ async def listar_via_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Botões de paginação
         botoes = []
         if page > 1:
-            botoes.append(InlineKeyboardButton("⬅️ Anterior", callback_data=f"via_start:{page-1}"))
+            botoes.append(InlineKeyboardButton("⬅️ Anterior", callback_data=f"via_start:{page - 1}"))
         if offset + USUARIOS_POR_PAGINA < total:
-            botoes.append(InlineKeyboardButton("Próxima ➡️", callback_data=f"via_start:{page+1}"))
+            botoes.append(InlineKeyboardButton("Próxima ➡️", callback_data=f"via_start:{page + 1}"))
 
         markup = InlineKeyboardMarkup([botoes]) if botoes else None
 
@@ -654,7 +667,7 @@ async def como_ganhar(update: Update, context: CallbackContext):
         "• troca de ciclo ou fim do evento, os pontos zeram\n"
         "• Comportamento spamming, banimento\n"
         "• Produto devolvido (se aplicar)\n\n"
-         f"{brindes_texto}\n\n"
+        f"{brindes_texto}\n\n"
         "Use /meus_pontos para ver seu total!"
     )
 
@@ -712,8 +725,8 @@ async def add_pontos_motivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["add_pt_reason"] = motivo
 
     alvo_id = context.user_data.pop("add_pt_id")
-    pontos   = context.user_data.pop("add_pt_value")
-    motivo   = context.user_data.pop("add_pt_reason")
+    pontos = context.user_data.pop("add_pt_value")
+    motivo = context.user_data.pop("add_pt_reason")
 
     novo_total = await atualizar_pontos(alvo_id, pontos, motivo, context.bot)
     await update.message.reply_text(
@@ -766,8 +779,8 @@ async def del_pontos_motivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("❗️ Motivo obrigatório. Digite um texto.")
 
     alvo_id = context.user_data.pop("del_pt_id")
-    pontos  = context.user_data.pop("del_pt_value")
-    motivo  = update.message.text.strip()
+    pontos = context.user_data.pop("del_pt_value")
+    motivo = update.message.text.strip()
 
     novo_total = await atualizar_pontos(alvo_id, -pontos, f"(removido) {motivo}", context.bot)
 
@@ -973,7 +986,7 @@ async def historico_usuario(update: Update, context: CallbackContext):
     if not is_callback:
         await update.message.reply_text(
             "ℹ️ Precisar de ajuda digite `/historico_usuario ajuda`",
-            parse_mode = "MarkdownV2"
+            parse_mode="MarkdownV2"
         )
 
     AJUDA_HISTORICO = (
@@ -1121,14 +1134,14 @@ async def historico_usuario(update: Update, context: CallbackContext):
         botoes.append(
             InlineKeyboardButton(
                 "◀️ Anterior",
-                callback_data=f"hist:{target_id or 0}:{page-1}"
+                callback_data=f"hist:{target_id or 0}:{page - 1}"
             )
         )
     if tem_mais:
         botoes.append(
             InlineKeyboardButton(
                 "Próximo ▶️",
-                callback_data=f"hist:{target_id or 0}:{page+1}"
+                callback_data=f"hist:{target_id or 0}:{page + 1}"
             )
         )
     markup = InlineKeyboardMarkup([botoes]) if botoes else None
@@ -1186,7 +1199,6 @@ async def historico_usuario(update: Update, context: CallbackContext):
 
 
 async def callback_historico(update: Update, context: CallbackContext):
-
     query = update.callback_query
     await query.answer()
 
@@ -1206,7 +1218,6 @@ async def callback_historico(update: Update, context: CallbackContext):
             self.effective_user = user
             self.message = message
             self.callback_query = callback_query
-
 
     # Rechama a função original reutilizando os parâmetros
     fake_update = FakeUpdate(query.from_user, query.message, query)
@@ -1234,6 +1245,7 @@ async def rem_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Retorna o estado onde o próximo handler será chamado
     return REM_ADMIN_ID
+
 
 async def rem_admin_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip()
@@ -1265,7 +1277,9 @@ async def rem_admin_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     del context.user_data["admin_lista"]
     return ConversationHandler.END
 
+
 PAGE_SIZE_LISTAR = 50
+
 
 async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1351,11 +1365,11 @@ async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = []
     if page > 1:
         buttons.append(
-            InlineKeyboardButton("◀️ Anterior", callback_data=f"usuarios|{page-1}")
+            InlineKeyboardButton("◀️ Anterior", callback_data=f"usuarios|{page - 1}")
         )
     if page < total_paginas:
         buttons.append(
-            InlineKeyboardButton("Próximo ▶️", callback_data=f"usuarios|{page+1}")
+            InlineKeyboardButton("Próximo ▶️", callback_data=f"usuarios|{page + 1}")
         )
     reply_markup = InlineKeyboardMarkup([buttons]) if buttons else None
 
@@ -1375,6 +1389,7 @@ async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN_V2,
             reply_markup=reply_markup
         )
+
 
 # Callback para navegação de páginas
 async def callback_listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1601,6 +1616,7 @@ main_conv = ConversationHandler(
     allow_reentry=True,
 )
 
+
 # --- Inicialização do bot ---
 async def main():
     global ADMINS
@@ -1620,21 +1636,20 @@ async def main():
 
     app.add_handler(
         ConversationHandler(
-            entry_points = [CommandHandler("start", start, filters=filters.ChatType.PRIVATE)],
-            states = {
+            entry_points=[CommandHandler("start", start, filters=filters.ChatType.PRIVATE)],
+            states={
                 ESCOLHENDO_DISPLAY: [
                     CallbackQueryHandler(tratar_display_choice, pattern=r"^set:")
                 ],
                 DIGITANDO_NICK: [
-                   MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nickname),
-                  MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar)
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nickname),
+                    MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar)
                 ],
             },
-            fallbacks = [CommandHandler("cancelar", cancelar)],
-            allow_reentry = True,
+            fallbacks=[CommandHandler("cancelar", cancelar)],
+            allow_reentry=True,
         )
     )
-
 
     app.add_handler(CommandHandler('admin', admin, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('meus_pontos', meus_pontos))
