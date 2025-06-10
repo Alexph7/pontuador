@@ -651,11 +651,12 @@ async def como_ganhar(update: Update, context: CallbackContext):
 
 async def news(update: Update, context: CallbackContext):
     await update.message.reply_text(
-        "🆕 *Novidades do Bot* (Junho 2025)\n\n"
+        "🆕 *Novidades* (Junho 2025)\n\n"
         "✅ Agora você ganha *2 pontos* por interação diária com o bot ou grupo!\n\n"
-        "✅ Erros em posts do Canal? *30 pontos!*\n"
-        "Funciona assim: depois do post, se achar link que não funciona ou leva a outro local\n"
-        "sem ser o mencionado, você ganha pontos.\n"
+        "✅ Dicas sobre moedas em lives, desde que haja tempo de resgate, *5 Pontos*\n"
+        "✅ Erros em posts do Canal? *agora valem 30 pontos!*\n"
+        "Funciona assim: depois do post, se achar link que não funciona,\n"
+        "link que leva a outro local, foto errada no post você ganha pontos.\n"
         "❌ Erros de ortografia não contam.\n"
         "❌ Também não vale se o erro foi da plataforma (ex: Mercado Livre, Shopee).\n\n"
         "🔔 Novas atualizações podem surgir a qualquer dia!\n\n"
