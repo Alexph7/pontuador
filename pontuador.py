@@ -104,7 +104,7 @@ async def init_db_pool():
             pontos             INTEGER NOT NULL DEFAULT 0,
             nivel_atingido     INTEGER NOT NULL DEFAULT 0,
             is_pontuador       BOOLEAN NOT NULL DEFAULT FALSE,
-            ultima_interacao   DATE,                                -- só para pontuar 1x/dia
+            _interacao   DATE,                                
             inserido_em        TIMESTAMPTZ NOT NULL DEFAULT NOW(),    -- quando o usuário foi inserido
             atualizado_em      TIMESTAMPTZ NOT NULL DEFAULT NOW(),     -- quando qualquer coluna for atualizada
             display_choice     VARCHAR(20) NOT NULL DEFAULT 'indefinido',
@@ -125,10 +125,10 @@ async def init_db_pool():
             palavra TEXT UNIQUE NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS admins (
+       CREATE TABLE IF NOT EXISTS admins (
             user_id BIGINT PRIMARY KEY
         );
-
+        
        CREATE TABLE IF NOT EXISTS usuario_history (
             id           SERIAL    PRIMARY KEY,
             user_id      BIGINT    NOT NULL REFERENCES usuarios(user_id) ON DELETE CASCADE,
@@ -214,7 +214,7 @@ async def adicionar_usuario_db(
                         await conn.execute(
                             """
                             UPDATE usuarios
-                               SET pontos = pontos + 1,
+                               SET pontos = pontos + 2,
                                    ultima_interacao = $1
                              WHERE user_id = $2::bigint
                             """,
@@ -224,7 +224,7 @@ async def adicionar_usuario_db(
                             """
                             INSERT INTO historico_pontos
                               (user_id, pontos, motivo)
-                            VALUES ($1::bigint, 1, 'ponto diário por interação')
+                            VALUES ($1::bigint, 2, 'ponto diário por interação')
                             """,
                             user_id
                         )
@@ -345,6 +345,7 @@ async def setup_commands(app):
         comandos_privados = comandos_basicos + [
             BotCommand("historico", "Mostrar seu histórico de pontos"),
             BotCommand("como_ganhar", "Como ganhar mais pontos"),
+            BotCommand("news", "Ver Novas Atualizações"),
         ]
 
         await app.bot.set_my_commands(
@@ -366,12 +367,6 @@ ADMIN_MENU = (
     "/listar_usuarios – lista de usuarios cadastrados\n"
     "/estatisticas – quantidade total de usuarios cadastrados\n"
     "/listar_via_start – usuario que se cadastraram via start\n"
-    # "/rem_pontuador – Remover permissão de pontuador\n"
-    # "/bloquear – Bloquear usuário\n"
-    # "/desbloquear – Desbloquear usuário\n"
-    # "/adapproibida – Adicionar palavra proibida\n"
-    # "/delproibida – Remover palavra proibida\n"
-    # "/listaproibida – Listar palavras proibidas\n"
 )
 
 
@@ -652,6 +647,20 @@ async def como_ganhar(update: Update, context: CallbackContext):
         "• Produto devolvido (se aplicar)\n\n"
         f"{brindes_texto}\n\n"
         "Use /meus_pontos para ver seu total!"
+    )
+
+async def news(update: Update, context: CallbackContext):
+    await update.message.reply_text(
+        "🆕 *Novidades do Bot* (Junho 2025)\n\n"
+        "✅ Agora você ganha *2 pontos* por interação diária com o bot ou grupo!\n\n"
+        "✅ Erros em posts do Canal? *30 pontos!*\n"
+        "Funciona assim: depois do post, se achar link que não funciona ou leva a outro local\n"
+        "sem ser o mencionado, você ganha pontos.\n"
+        "❌ Erros de ortografia não contam.\n"
+        "❌ Também não vale se o erro foi da plataforma (ex: Mercado Livre, Shopee).\n\n"
+        "🔔 Novas atualizações podem surgir a qualquer dia!\n\n"
+        "Fique ligado e continue participando. 🚀",
+        parse_mode="Markdown"
     )
 
 
@@ -1619,6 +1628,8 @@ async def main():
     app.add_handler(CommandHandler("listar_usuarios", listar_usuarios))
     app.add_handler(CommandHandler("listar_via_start", listar_via_start))
     app.add_handler(CommandHandler("estatisticas", estatisticas))
+    app.add_handler(CommandHandler("news", news))
+
     # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
 
