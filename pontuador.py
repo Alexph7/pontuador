@@ -214,7 +214,7 @@ async def adicionar_usuario_db(
                         await conn.execute(
                             """
                             UPDATE usuarios
-                               SET pontos = pontos + 2,
+                               SET pontos = pontos + 3,
                                    ultima_interacao = $1
                              WHERE user_id = $2::bigint
                             """,
@@ -224,7 +224,7 @@ async def adicionar_usuario_db(
                             """
                             INSERT INTO historico_pontos
                               (user_id, pontos, motivo)
-                            VALUES ($1::bigint, 2, 'ponto diário por interação')
+                            VALUES ($1::bigint, 3, 'ponto diário por interação')
                             """,
                             user_id
                         )
@@ -638,8 +638,8 @@ async def como_ganhar(update: Update, context: CallbackContext):
         "🎯Pontos Válidos a Partir de 1 de Maio de 2025\n"
         "  Você Pode Ganha Pontos Por:\n"
         "• Compras por ID em videos.\n"
-        "• 2 pontos por comentar 1 vez em grupo ou interação com bot\n"
-        "• 8 pontos por dicas de lives com moedas desde que dê tempo o resgate. \n"
+        "• 3 pontos por comentar 1 vez em grupo ou interação com bot\n"
+        "• 20 pontos por dicas de lives com moedas desde que dê tempo o resgate. \n"
         "• 30 pontos por encontrar erros nos posts. \n\n"
         " Funciona assim: depois do post, se achar link que não funciona,\n"
         " link que leva a outro local, foto errada no post você ganha pontos.\n"
@@ -657,8 +657,8 @@ async def como_ganhar(update: Update, context: CallbackContext):
 async def news(update: Update, context: CallbackContext):
     await update.message.reply_text(
         "🆕 *Novidades* (Junho 2025)\n\n"
-        "✅ Agora você ganha *2 pontos* por interação diária com o bot comentários em grupos!\n\n"
-        "✅ Dicas sobre moedas em lives, desde que haja tempo de resgate, *8 Pontos*\n"
+        "✅ Agora você ganha *3 pontos* por interação diária com o bot comentários em grupos!\n\n"
+        "✅ Dicas sobre moedas em lives, desde que haja tempo de resgate, *20 Pontos*\n"
         "✅ Erros em posts do Canal? *agora valem 30 pontos!*\n"
         "Funciona assim: depois do post, se achar link que não funciona,\n"
         "link que leva a outro local, foto errada no post você ganha pontos.\n"
