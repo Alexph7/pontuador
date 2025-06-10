@@ -603,33 +603,16 @@ async def paginacao_via_start(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def meus_pontos(update: Update, context: CallbackContext):
-    user = update.effective_user
-
+    user_id = update.effective_user.id
     try:
-        perfil = await obter_ou_criar_usuario_db(
-            user_id=user.id,
-            username=user.username or "vazio",
-            first_name=user.first_name or "vazio",
-            last_name=user.last_name or "vazio",
+        # 1) Processa presença diária (vai dar 1 ponto se ainda não pontuou hoje)
+        await processar_presenca_diaria(user_id, context.bot)
+
+        # 2) Busca o perfil já com os pontos atualizados
+        perfil = await pool.fetchrow(
+            "SELECT pontos, nivel_atingido FROM usuarios WHERE user_id = $1",
+            user_id
         )
-
-        ts = perfil.get("ultima_interacao")
-        if isinstance(ts, datetime):
-            ultima_data = ts.date()
-        elif isinstance(ts, date):
-            ultima_data = ts
-        else:
-            ultima_data = None
-
-        if ultima_data is None or ultima_data != hoje_data_sp():
-            await atualizar_pontos(user.id, 1, "Presença diária (/meus_pontos)", context.bot)
-            agora_sp = datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
-            await pool.execute(
-                "UPDATE usuarios SET ultima_interacao = $1 WHERE user_id = $2::bigint",
-                agora_sp, user.id
-            )
-            logger.info(f"[PRESENÇA /meus_pontos] 1 ponto para {user.id} em {hoje_data_sp()}")
-
         pontos = perfil['pontos']
         nivel = perfil['nivel_atingido']
 
@@ -643,7 +626,7 @@ async def meus_pontos(update: Update, context: CallbackContext):
         )
 
     except Exception as e:
-        logger.error(f"Erro ao buscar pontos do usuário {user.id}: {e}", exc_info=True)
+        logger.error(f"Erro ao buscar pontos do usuário {user_id}: {e}", exc_info=True)
         await update.message.reply_text(
             "❌ Desculpe, tivemos um problema ao acessar as suas informações. "
             "Tente novamente mais tarde. Se o problema persistir, contate o suporte."
@@ -860,42 +843,24 @@ async def historico(update: Update, context: CallbackContext):
 
 
 async def ranking_top10(update: Update, context: CallbackContext):
-    user = update.effective_user
+    user_id = update.effective_user.id
 
-    perfil = await obter_ou_criar_usuario_db(
-        user_id=user.id,
-        username=user.username or "vazio",
-        first_name=user.first_name or "vazio",
-        last_name=user.last_name or "vazio",
+    # 1) Presença diária unificada
+    await processar_presenca_diaria(user_id, context.bot)
+
+    # 2) Só precisamos do display_choice no privado
+    perfil = await pool.fetchrow(
+        "SELECT display_choice FROM usuarios WHERE user_id = $1",
+        user_id
     )
-
-    if update.effective_chat.type == "private":
-        if perfil["display_choice"] == "indefinido":
-            await update.message.reply_text(
-                "⚠️ Para acessar o ranking, primeiro escolha como seu nome deve aparecer.\n\n"
-                "Use /start para fazer essa escolha."
-            )
-            return
-
-    # Checa presença diária
-    ts = perfil["ultima_interacao"]
-    if isinstance(ts, datetime):
-        ultima_data = ts.date()
-    elif isinstance(ts, date):
-        ultima_data = ts
-    else:
-        ultima_data = None
-
-    if ultima_data is None or ultima_data != hoje_data_sp():
-        await atualizar_pontos(user.id, 1, "Presença diária (/ranking_top10)", context.bot)
-        agora_sp = datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
-        await pool.execute(
-            "UPDATE usuarios SET ultima_interacao = $1 WHERE user_id = $2::bigint",
-            agora_sp, user.id
+    if update.effective_chat.type == "private" and perfil["display_choice"] == "indefinido":
+        await update.message.reply_text(
+            "⚠️ Para acessar o ranking, primeiro escolha como seu nome deve aparecer.\n\n"
+            "Use /start para fazer essa escolha."
         )
-        logger.info(f"[PRESENÇA /ranking_top10] 1 ponto para {user.id} em {hoje_data_sp()}")
+        return
 
-    # Busca top 10
+    # 3) Busca top 10
     top = await pool.fetch(
         """
         SELECT
@@ -937,31 +902,23 @@ async def tratar_presenca(update, context):
     user = update.effective_user
     if user is None or user.is_bot:
         return
+    # Agora só chamamos a função unificada
+    await processar_presenca_diaria(user.id, context.bot)
 
-    # 1) Garante que exista — sem alterar display_choice/nickname já configurados
-    await obter_ou_criar_usuario_db(
-        user_id=user.id,
-        username=user.username or "vazio",
-        first_name=user.first_name or "vazio",
-        last_name=user.last_name or "vazio",
-        via_start=False
-    )
 
-    # 2) Agora verifica presença diária via ultima_interacao (como ajustamos antes)
-    hoje = hoje_data_sp()
-    ultima = await pool.fetchval(
-        "SELECT ultima_interacao FROM usuarios WHERE user_id = $1",
-        user.id
-    )
-    if ultima is None or ultima != hoje:
-        # Dá 1 ponto e atualiza ultima_interacao
-        await atualizar_pontos(user.id, 1, 'Presença diária', context.bot)
-        agora = datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
+async def processar_presenca_diaria(user_id: int, bot: Bot) -> int | None:
+    # Garante que o usuário exista
+    perfil = await obter_ou_criar_usuario_db(user_id, "", "", "")
+    # Se ainda não pontuou hoje…
+    if perfil["ultima_interacao"] != hoje_data_sp():
+        # Dá 1 ponto e atualiza última interação
+        novo_total = await atualizar_pontos(user_id, 1, "Presença diária", bot)
         await pool.execute(
             "UPDATE usuarios SET ultima_interacao = $1 WHERE user_id = $2::bigint",
-            agora, user.id
+            hoje_data_sp(), user_id
         )
-        logger.info(f"[PRESENÇA] 1 ponto para {user.id} em {hoje}")
+        return novo_total
+    return None
 
 
 async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
@@ -1417,9 +1374,9 @@ from telegram.ext import ContextTypes
 
 async def estatisticas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Comando que exibe estatísticas agregadas “no tempo todo” e “hoje”:
+    Comando que exibe estatísticas agregadas “no tempo t odo” e “hoje”:
 
-    ➤ No tempo todo (All time):
+    ➤ No tempo t odo (All time):
       1. Total de usuários cadastrados
       2. Usuários que já interagiram (receberam pelo menos 1 ponto)
       3. Usuários que já atingiram algum nível (nivel_atingido > 0)
