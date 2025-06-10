@@ -638,8 +638,13 @@ async def como_ganhar(update: Update, context: CallbackContext):
         "🎯Pontos Válidos a Partir de 1 de Maio de 2025\n"
         "  Você Pode Ganha Pontos Por:\n"
         "• Compras por ID em videos.\n"
-        "• Até 1 comentário diario em grupos ou interação com bot\n"
-        "• Muito cedo, mais opções de como ganhar pontos aparecerá em breve. \n\n"
+        "• 2 pontos por comentar 1 vez em grupo ou interação com bot\n"
+        "• 8 pontos por dicas de lives com moedas desde que dê tempo o resgate. \n"
+        "• 30 pontos por encontrar erros nos posts. \n\n"
+        " Funciona assim: depois do post, se achar link que não funciona,\n"
+        " link que leva a outro local, foto errada no post você ganha pontos.\n"
+        "❌ Erros de ortografia não contam.\n"
+        "❌ Também não vale se o erro foi da plataforma (ex: Mercado Livre, Shopee).\n\n"
         "💸 Como Você Pode Perder Pontos:\n"
         "• Trocas por brindes, desconta os pontos.\n"
         "• troca de ciclo ou fim do evento, os pontos zeram\n"
@@ -653,14 +658,14 @@ async def news(update: Update, context: CallbackContext):
     await update.message.reply_text(
         "🆕 *Novidades* (Junho 2025)\n\n"
         "✅ Agora você ganha *2 pontos* por interação diária com o bot comentários em grupos!\n\n"
-        "✅ Dicas sobre moedas em lives, desde que haja tempo de resgate, *5 Pontos*\n"
+        "✅ Dicas sobre moedas em lives, desde que haja tempo de resgate, *8 Pontos*\n"
         "✅ Erros em posts do Canal? *agora valem 30 pontos!*\n"
         "Funciona assim: depois do post, se achar link que não funciona,\n"
         "link que leva a outro local, foto errada no post você ganha pontos.\n"
         "❌ Erros de ortografia não contam.\n"
-        "❌ Também não vale se o erro foi da plataforma (ex: Mercado Livre, Shopee).\n\n"
-        "🔔 Novas atualizações podem surgir a qualquer dia!\n\n"
-        "Fique ligado e continue participando. 🚀",
+        "❌ Também não vale se o erro foi da plataforma (ex: Mercado Livre, Shopee).\n"
+        "🔔 Novas atualizações podem surgir diariamente!\n"
+        "Fique ligado e continue participando. 🚀\n\n",
         parse_mode="Markdown"
     )
 
