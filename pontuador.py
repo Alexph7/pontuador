@@ -635,35 +635,35 @@ async def como_ganhar(update: Update, context: CallbackContext):
         for pontos, descricao in sorted(NIVEIS_BRINDES.items())
     )
     await update.message.reply_text(
-        "🎯Pontos Válidos a Partir de 1 de Maio de 2025\n"
-        "  Você Pode Ganha Pontos Por:\n"
-        "• Compras por ID em videos.\n"
-        "• 3 pontos por comentar 1 vez em grupo ou interação com bot\n"
-        "• 20 pontos por dicas de lives com moedas desde que dê tempo o resgate. \n"
-        "• 30 pontos por encontrar erros nos posts. \n\n"
+        "🎯*Pontos Válidos a Partir de 1 de Maio de 2025 a 30 de Junho*\n\n"
+        "  *Você Pode Ganha Pontos Por*:\n"
+        "✅ Compras por ID em videos.\n\n"
+        "✅ 03 pontos por comentar 1 vez em grupo ou interação com bot\n\n"
+        "✅ 20 pontos por dicas de lives com moedas desde que dê tempo o resgate.\n\n"
+        "✅ 30 pontos por encontrar erros nos posts. \n\n"
         " Funciona assim: depois do post, se achar link que não funciona,\n"
         " link que leva a outro local, foto errada no post você ganha pontos.\n"
         "❌ Erros de ortografia não contam.\n"
         "❌ Também não vale se o erro foi da plataforma (ex: Mercado Livre, Shopee).\n\n"
         "💸 Como Você Pode Perder Pontos:\n"
-        "• Trocas por brindes, desconta os pontos.\n"
-        "• troca de ciclo ou fim do evento, os pontos zeram\n"
-        "• Comportamento spamming, banimento\n"
-        "• Produto devolvido (se aplicar)\n\n"
-        f"{brindes_texto}\n\n"
-        "Use /meus_pontos para ver seu total!"
+        "❌ Trocas por brindes, desconta os pontos.\n"
+        "❌ troca de ciclo ou fim do evento, os pontos zeram\n"
+        "❌ Comportamento spamming, banimento\n"
+        "❌ Produto devolvido (se aplicar)\n\n"
+        f"{brindes_texto}\n\n",
+        parse_mode="Markdown"
     )
 
 async def news(update: Update, context: CallbackContext):
     await update.message.reply_text(
         "🆕 *Novidades* (Junho 2025)\n\n"
         "✅ Agora você ganha *3 pontos* por interação diária com o bot ou comentários em grupos!\n\n"
-        "✅ Dicas sobre moedas em lives, desde que haja tempo de resgate, *20 Pontos*\n"
-        "✅ Erros em posts do Canal? *agora valem 30 pontos!*\n"
+        "✅ Dicas sobre moedas em lives, desde que haja tempo de resgate, *20 Pontos*\n\n"
+        "✅ Erros em posts do Canal? *agora valem 30 pontos!*\n\n"
         "Funciona assim: depois do post, se achar link que não funciona,\n"
         "link que leva a outro local, foto errada no post você ganha pontos.\n"
         "❌ Erros de ortografia não contam.\n"
-        "❌ Também não vale se o erro foi da plataforma (ex: Mercado Livre, Shopee).\n"
+        "❌ Também não vale se o erro foi da plataforma (ex: Mercado Livre, Shopee).\n\n"
         "🔔 Novas atualizações podem surgir diariamente!\n"
         "Fique ligado e continue participando. 🚀\n\n",
         parse_mode="Markdown"
