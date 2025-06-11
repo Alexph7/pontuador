@@ -927,7 +927,7 @@ async def processar_presenca_diaria(user_id: int, bot: Bot) -> int | None:
     # Se ainda não pontuou hoje…
     if perfil["ultima_interacao"] != hoje_data_sp():
         # Dá 1 ponto e atualiza última interação
-        novo_total = await atualizar_pontos(user_id, 1, "Presença diária", bot)
+        novo_total = await atualizar_pontos(user_id, 3, "Presença diária", bot)
         await pool.execute(
             "UPDATE usuarios SET ultima_interacao = $1 WHERE user_id = $2::bigint",
             hoje_data_sp(), user_id
