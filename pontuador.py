@@ -814,14 +814,11 @@ async def atualizar_pontos(
 
     pontos_atuais = usuario['pontos'] or 0
     novos = pontos_atuais + delta
-    nivel = usuario['nivel_atingido'] or 0
+    nivel = 0
 
     await registrar_historico_db(user_id, delta, motivo)
 
-    for limiar in NIVEIS_BRINDES.keys():
-        if pontos_atuais < limiar <= novos:
-            nivel += 1
-            break
+    nivel = sum(1 for limiar in NIVEIS_BRINDES if novos >= limiar)
 
     await pool.execute(
         """
