@@ -89,6 +89,7 @@ NIVEIS_BRINDES = {
 
 TEMPO_LIMITE_BUSCA = 10  # Tempo máximo (em segundos) para consulta
 
+ranking_mensagens = {}
 
 async def init_db_pool():
     global pool, ADMINS
@@ -611,13 +612,18 @@ async def meus_pontos(update: Update, context: CallbackContext):
         pontos = perfil['pontos']
         nivel = perfil['nivel_atingido']
 
+        # Calcula a posição do usuário no ranking geral
+        posicao = await pool.fetchval(
+            "SELECT COUNT(*) + 1 FROM usuarios WHERE pontos > $1",
+            pontos
+        )
         if nivel == 0:
             nivel_texto = "rumo ao Nível 1"
         else:
             nivel_texto = f"Eba! Já alcançou brinde de Nível {nivel}"
 
         await update.message.reply_text(
-            f"🎉 Você tem {pontos} pontos {nivel_texto}."
+            f"🎉 Você tem {pontos} pontos. {nivel_texto} 🏅 {posicao}º lugar."
         )
 
     except Exception as e:
@@ -856,6 +862,7 @@ async def historico(update: Update, context: CallbackContext):
 
 async def ranking_top10(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
 
     # 1) Presença diária unificada
     await processar_presenca_diaria(user_id, context.bot)
@@ -872,7 +879,14 @@ async def ranking_top10(update: Update, context: CallbackContext):
         )
         return
 
-    # 3) Busca top 10
+    mensagem_antiga_id = ranking_mensagens.get(chat_id)
+    if mensagem_antiga_id:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=mensagem_antiga_id)
+        except:
+            pass  # Ignora erro se a mensagem já tiver sido apagada manualmente
+
+    # Busca top 10
     top = await pool.fetch(
         """
         SELECT
@@ -889,7 +903,8 @@ async def ranking_top10(update: Update, context: CallbackContext):
     )
 
     if not top:
-        await update.message.reply_text("🏅 Nenhum usuário cadastrado no ranking.")
+        msg = await update.message.reply_text("🏅 Nenhum usuário cadastrado no ranking.")
+        ranking_mensagens[chat_id] = msg.message_id
         return
 
     linhas = ["🏅 Top 10 de pontos:"]
@@ -907,7 +922,9 @@ async def ranking_top10(update: Update, context: CallbackContext):
         linhas.append(f"{i + 1}. {display} - {u['pontos']} pts")
 
     texto = "\n\n".join(linhas)
-    await update.message.reply_text(texto)
+    msg = await update.message.reply_text(texto)
+
+    ranking_mensagens[chat_id] = msg.message_id
 
 
 async def tratar_presenca(update, context):
