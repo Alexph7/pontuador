@@ -122,13 +122,26 @@ async def init_db_pool():
             data TIMESTAMPTZ  DEFAULT CURRENT_TIMESTAMP
         );
 
-       CREATE TABLE IF NOT EXISTS palavras_proibidas (
-            id SERIAL PRIMARY KEY,
-            palavra TEXT UNIQUE NOT NULL
-        );
-
        CREATE TABLE IF NOT EXISTS admins (
             user_id BIGINT PRIMARY KEY
+        );
+
+        -- 1) Guarda cada recomendação (só o essencial)
+       CREATE TABLE IF NOT EXISTS recomendacoes (
+            id              SERIAL        PRIMARY KEY,
+            user_id         BIGINT        NOT NULL REFERENCES usuarios(user_id),
+            nome_exibicao   TEXT          NOT NULL,             -- snapshot do display_choice/nickname
+            moedas          SMALLINT      NOT NULL CHECK (moedas >= 5),
+            criada_em       TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+        );
+        
+        -- 2) Armazena os votos, um por usuário, máximo 3 por recomendação
+       CREATE TABLE IF NOT EXISTS recomendacao_votos (
+            rec_id      INTEGER     NOT NULL REFERENCES recomendacoes(id) ON DELETE CASCADE,
+            voter_id    BIGINT      NOT NULL,                     -- quem votou
+            voto        BOOLEAN     NOT NULL,                     -- TRUE = positivo, FALSE = negativo
+            votado_em   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (rec_id, voter_id)
         );
 
        CREATE TABLE IF NOT EXISTS usuario_history (
