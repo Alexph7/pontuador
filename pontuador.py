@@ -346,6 +346,7 @@ async def setup_commands(app):
         # 2) Comandos em chat privado (com suporte)
         comandos_privados = comandos_basicos + [
             BotCommand("historico", "Mostrar seu histórico de pontos"),
+            BotCommand("live", "Enviar Link de live com moedas"),
             BotCommand("como_ganhar", "Como ganhar mais pontos"),
             BotCommand("news", "Ver Novas Atualizações"),
         ]
@@ -1548,6 +1549,46 @@ async def estatisticas(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Não foi possível gerar as estatísticas no momento")
 
 
+LIVE_LINK = 0
+
+# 1️⃣ Handler do comando /live
+async def live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Inicia a conversa pedindo o link da live.
+    """
+    await update.message.reply_text(
+        "📎 Por favor, envie o link da live.\n"
+        "O domínio deve começar com `br.shp.ee` (você pode ou não incluir `http://` ou `https://`)."
+    )
+    return LIVE_LINK
+
+# 2️⃣ Handler que recebe e valida o link
+async def live_receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    link = update.message.text.strip()
+    # regex: aceita opcional http(s)://, depois br.shp.ee, e ao menos “/algo” ou final de string
+    pattern = re.compile(r'^(?:https?://)?br\.shp\.ee(?:/.*)?$')
+    if not pattern.match(link):
+        await update.message.reply_text(
+            "❌ Link inválido. Ele deve usar o domínio `br.shp.ee`.\n"
+            "Tente novamente:"
+        )
+        return LIVE_LINK
+
+    # aqui você pode processar o link...
+    await update.message.reply_text(f"✅ Link válido recebido: {link}")
+    return ConversationHandler.END
+
+# 3️⃣ Registro no seu ApplicationBuilder
+live_conv = ConversationHandler(
+    entry_points=[CommandHandler('live', live, filters=filters.ChatType.PRIVATE)],
+    states={
+        LIVE_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, live_receive_link)],
+    },
+    fallbacks=[CommandHandler('cancelar', lambda u, c: ConversationHandler.END)],
+    allow_reentry=True
+)
+
+
 async def on_startup(app):
     global ADMINS
     await init_db_pool()
@@ -1621,6 +1662,7 @@ async def main():
         .build()
     )
     app.add_handler(main_conv)
+    app.add_handler(live_conv)
 
     app.add_handler(
         ConversationHandler(
@@ -1650,7 +1692,6 @@ async def main():
     app.add_handler(CommandHandler("listar_usuarios", listar_usuarios))
     app.add_handler(CommandHandler("listar_via_start", listar_via_start))
     app.add_handler(CommandHandler("estatisticas", estatisticas))
-    app.add_handler(CommandHandler("live", live, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("news", news))
 
     # Presença em grupos
