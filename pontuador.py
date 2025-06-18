@@ -1549,34 +1549,45 @@ async def estatisticas(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Não foi possível gerar as estatísticas no momento")
 
 
-LIVE_LINK = 0
+LIVE_LINK, LIVE_MOEDAS = range(2)
 
 # 1️⃣ Handler do comando /live
 async def live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Inicia a conversa pedindo o link da live.
-    """
     await update.message.reply_text(
         "📎 Por favor, envie o link da live.\n"
-        "O domínio deve começar com `br.shp.ee` (você pode ou não incluir `http://` ou `https://`)."
+        "Deve começar com `br.shp.ee`, Geralmente é melhor sugerir lives que estão prestes a liberar moedas, para que dê tempo."
     )
     return LIVE_LINK
 
-# 2️⃣ Handler que recebe e valida o link
+
 async def live_receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     link = update.message.text.strip()
-    # regex: aceita opcional http(s)://, depois br.shp.ee, e ao menos “/algo” ou final de string
     pattern = re.compile(r'^(?:https?://)?br\.shp\.ee(?:/.*)?$')
-    if not pattern.match(link):
+
+    if not pattern.match(link) or len(link) > 28:
         await update.message.reply_text(
-            "❌ Link inválido. Ele deve usar o domínio `br.shp.ee`.\n"
-            "Tente novamente:"
+            "❌ Link inválido. Ele deve começar com `br.shp.ee` ou não é valido para lives.\nTente novamente:"
         )
         return LIVE_LINK
 
-    # aqui você pode processar o link...
-    await update.message.reply_text(f"✅ Link válido recebido: {link}")
+    context.user_data["link_da_live"] = link
+    await update.message.reply_text("💰 Quantas moedas? vale apenas a partir de 5, os usuarios serão notificados, use com cuidado:")
+    return LIVE_MOEDAS
+
+async def live_receive_moedas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        moedas = int(update.message.text)
+        if moedas < 5:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("❌ Valor inválido. Envie um número a partir de 5:")
+        return LIVE_MOEDAS
+
+    link = context.user_data["link"]
+    await update.message.reply_text(f"✅ Link: {link}\n✅ Moedas: {moedas}")
+    # Aqui você pode salvar no banco, etc.
     return ConversationHandler.END
+
 
 # 3️⃣ Registro no seu ApplicationBuilder
 live_conv = ConversationHandler(
