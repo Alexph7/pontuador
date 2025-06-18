@@ -1650,6 +1650,7 @@ async def main():
     app.add_handler(CommandHandler("listar_usuarios", listar_usuarios))
     app.add_handler(CommandHandler("listar_via_start", listar_via_start))
     app.add_handler(CommandHandler("estatisticas", estatisticas))
+    app.add_handler(CommandHandler("live", live, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("news", news))
 
     # Presença em grupos
