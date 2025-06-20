@@ -126,6 +126,12 @@ async def init_db_pool():
             user_id BIGINT PRIMARY KEY
         );
 
+       CREATE TABLE IF NOT EXISTS grupos_recomendacao (
+           chat_id      BIGINT PRIMARY KEY,
+           titulo       TEXT,
+           registrado_em TIMESTAMP DEFAULT NOW()
+        );
+
         -- 1) Guarda cada recomendação de lives (só o essencial)
        CREATE TABLE IF NOT EXISTS recomendacoes (
             id              SERIAL PRIMARY KEY,
@@ -384,6 +390,7 @@ ADMIN_MENU = (
     "/listar_usuarios – lista de usuarios cadastrados\n"
     "/estatisticas – quantidade total de usuarios cadastrados\n"
     "/listar_via_start – usuario que se cadastraram via start\n"
+    "/registrar_grupo – onde as mensagens de links de lives serao enviadas\n"
 )
 
 
@@ -657,13 +664,13 @@ async def como_ganhar(update: Update, context: CallbackContext):
         for pontos, descricao in sorted(NIVEIS_BRINDES.items())
     )
     await update.message.reply_text(
-        "🎯*Pontos Válidos a Partir de 1 de Maio de 2025 a 30 de Juho*\n\n"
-        "  *Você Pode Ganha Pontos Por*:\n"
+        "🎯*Pontos Válidos a Partir de 1 de Maio de 2025 a 30 de Junho*\n\n"
+        "  *Você Pode Ganhar Pontos Por*:\n"
         "✅ Compras por ID em videos, ex: o produto do video custar $20\n"
-        "  mas com cupom e moedas o valor final for R$15, entao serão 15 pontos.\n\n"
-        "✅ 03 pontos por comentar 1 vez em grupo ou interação com bot\n\n"
-        "✅ 20 pontos por dicas de lives com moedas desde que dê tempo o resgate.\n\n"
+        "mas com cupom e moedas o valor final for R$15, entao serão 15 pontos.\n\n"
+        "✅ 03 pontos por comentar 1 vez em grupo ou interagir com o bot\n\n"
         "✅ 30 pontos por encontrar erros nos posts. \n\n"
+        "✅ Ganhe pontos indicando lives toque co comando /live. \n\n"
         " Funciona assim: depois do post, se achar link que não funciona,\n"
         " link que leva a outro local, foto errada no post você ganha pontos.\n"
         "❌ Erros de ortografia não contam.\n"
@@ -680,16 +687,21 @@ async def como_ganhar(update: Update, context: CallbackContext):
 
 async def news(update: Update, context: CallbackContext):
     await update.message.reply_text(
-        "🆕 *Novidades* (Junho 2025)\n\n"
-        "✅ Agora você ganha *3 pontos* por interação diária com o bot ou comentários em grupos!\n\n"
-        "✅ Dicas sobre moedas em lives, desde que haja tempo de resgate, *20 Pontos*\n\n"
-        "✅ Erros em posts do Canal? *agora valem 30 pontos!*\n\n"
-        "Funciona assim: depois do post, se achar link que não funciona,\n"
-        "link que leva a outro local, foto errada no post você ganha pontos.\n"
-        "❌ Erros de ortografia não contam.\n"
-        "❌ Também não vale se o erro foi da plataforma (ex: Mercado Livre, Shopee).\n\n"
-        "🔔 Novas atualizações podem surgir diariamente!\n"
-        "Fique ligado e continue participando. 🚀\n\n",
+        "🆕 *Novidades* (20 Junho 2025)\n\n"
+        "Nova interação e ranking para lives, toque em /live e recomende um link \n"
+        "no qual há live que irá sair moedas, no minimo 5\n"
+        "você ganha pontos 10x o valor de moedas, exemplo: live com 5 moedas = 50 pontos\n"
+        "os links serão enviados ao grupo e outros usuarios vão votar\n"
+        "3 usuarios aleatorios poderao votar em positivo ou negativo 👍 ou 👎 \n"
+        "conseguindo 2 votos os pontos serão adicionados, e votando em alguma recomendação vc ganha 10 pontos\n"
+        "não conseguirá votar na própria recomendação, nem recomendar a mesma live duas vezes com mesmo link\n\n"
+        "os melhores colocados no ranking ganham prêmio\n"
+        "1ª lugar: R$80 em compras\n"
+        "2ª lugar: R$50 em compras\n"
+        "3ª lugar: R$30 em compras\n"
+        "4ª ao 8ª lugar: R$19 em compras\n"
+        "Fora do bot, pode recomendar lives digitando o link e a quantidade de moedas\n"
+        "exemplo: 'Vai sair 7 moedas na live -br.shp.ee ...' \n\n\n",
         parse_mode="Markdown"
     )
 
@@ -1566,12 +1578,20 @@ async def estatisticas(update: Update, context: ContextTypes.DEFAULT_TYPE):
 LIVE_LINK, LIVE_MOEDAS = range(2)
 
 async def registrar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    # só grupos e supergrupos
-    if update.effective_chat.type in ("group", "supergroup"):
-        context.bot_data.setdefault("grupos", set()).add(chat_id)
-    await processar_presenca_diaria(update.effective_user.id, context.bot)
+    chat = update.effective_chat
 
+    if chat.type in ("group", "supergroup"):
+        await pool.execute(
+            """
+            INSERT INTO grupos_recomendacao (chat_id, titulo)
+            VALUES ($1, $2)
+            ON CONFLICT (chat_id) DO NOTHING
+            """,
+            chat.id, chat.title or ""
+        )
+        await update.message.reply_text("✅ Grupo registrado para receber recomendações!")
+    else:
+        await update.message.reply_text("❌ Este comando só pode ser usado em grupos.")
 
 # 1️⃣ Handler do comando /live
 async def live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1640,16 +1660,22 @@ async def live_receive_moedas(update: Update, context: ContextTypes.DEFAULT_TYPE
     texto = (
         f"📣 *{nome}* recomendou uma live por *{moedas} moedas!*\n"
         f"🔗 {link}\n\n"
-        "Devo adicionar pontos a esse usuário? Vote e ganhe também!"
+        "Esta recomendação é verdadeira? Vote e ganhe pontos também!"
     )
     teclado = InlineKeyboardMarkup([[
         InlineKeyboardButton("👍", callback_data=f"voto:{rec_id}:1"),
         InlineKeyboardButton("👎", callback_data=f"voto:{rec_id}:0"),
     ]])
 
-    for cid in context.bot_data.get("grupos", []):
+    grupos = await pool.fetch("SELECT chat_id FROM grupos_recomendacao")
+    for row in grupos:
         try:
-            await context.bot.send_message(cid, texto, reply_markup=teclado, parse_mode="Markdown")
+            await context.bot.send_message(
+                chat_id=row["chat_id"],
+                text=texto,
+                reply_markup=teclado,
+                parse_mode="Markdown"
+            )
         except:
             pass
 
@@ -1670,21 +1696,25 @@ live_conv = ConversationHandler(
 
 async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     voter_id = query.from_user.id
+
+    # Extrai dados do callback
     _, rec_id_str, voto_str = query.data.split(":")
     rec_id, voto = int(rec_id_str), bool(int(voto_str))
 
+    # Busca recomendação
     rec = await pool.fetchrow("SELECT user_id, moedas FROM recomendacoes WHERE id=$1", rec_id)
     if not rec:
         return await query.answer("❌ Recomendação não encontrada.", show_alert=True)
     if rec["user_id"] == voter_id:
         return await query.answer("❌ Você não pode votar em si mesmo.", show_alert=True)
 
+    # Verifica se já atingiu 3 votos
     total = await pool.fetchval("SELECT COUNT(*) FROM recomendacao_votos WHERE rec_id=$1", rec_id)
     if total >= 3:
         return await query.answer("❌ Já existem 3 votos.", show_alert=True)
 
+    # Verifica voto duplicado
     dup = await pool.fetchval(
         "SELECT 1 FROM recomendacao_votos WHERE rec_id=$1 AND voter_id=$2",
         rec_id, voter_id
@@ -1692,13 +1722,29 @@ async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if dup:
         return await query.answer("❌ Você já votou aqui.", show_alert=True)
 
+    # Registra o voto
     await pool.execute(
-        "INSERT INTO recomendacao_votos (rec_id, voter_id, voto) VALUES ($1,$2,$3)",
+        "INSERT INTO recomendacao_votos (rec_id, voter_id, voto) VALUES ($1, $2, $3)",
         rec_id, voter_id, voto
     )
 
+    # Conta votos
     votos = await pool.fetch("SELECT voto FROM recomendacao_votos WHERE rec_id=$1", rec_id)
     positivos = sum(1 for v in votos if v["voto"])
+    negativos = len(votos) - positivos
+
+    # Atualiza botões com número de votos
+    novos_botoes = InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"👍 {positivos}", callback_data=f"voto:{rec_id}:1"),
+        InlineKeyboardButton(f"👎 {negativos}", callback_data=f"voto:{rec_id}:0"),
+    ]])
+
+    try:
+        await query.edit_message_reply_markup(reply_markup=novos_botoes)
+    except:
+        pass  # ignora erros se não puder editar (mensagem muito antiga, etc)
+
+    # Se já tem 3 votos e ao menos 2 positivos, dá os pontos
     if len(votos) == 3 and positivos >= 2:
         pontos = rec["moedas"] * 10
         await atualizar_pontos(rec["user_id"], pontos, "Live aprovada")
@@ -1710,7 +1756,7 @@ async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-    await query.answer("✅ Voto registrado!")
+    return await query.answer("✅ Voto registrado!", show_alert=True)
 
 
 async def on_startup(app):
@@ -1785,10 +1831,10 @@ async def main():
         .post_init(setup_commands)
         .build()
     )
-    app.add_handler(MessageHandler(filters.ChatType.GROUPS, registrar_grupo))
     app.add_handler(main_conv)
     app.add_handler(live_conv)
     app.add_handler(CallbackQueryHandler(tratar_voto, pattern=r"^voto:\d+:[01]$"))
+    app.add_handler(CommandHandler("registrar_grupo", registrar_grupo, filters=filters.ChatType.GROUPS))
 
     app.add_handler(
         ConversationHandler(
