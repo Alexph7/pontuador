@@ -106,7 +106,7 @@ async def init_db_pool():
             pontos             INTEGER NOT NULL DEFAULT 0,
             nivel_atingido     INTEGER NOT NULL DEFAULT 0,
             is_pontuador       BOOLEAN NOT NULL DEFAULT FALSE,
-            _interacao   DATE,                                
+            ultima_interacao   DATE,                                
             inserido_em        TIMESTAMPTZ NOT NULL DEFAULT NOW(),    -- quando o usuário foi inserido
             atualizado_em      TIMESTAMPTZ NOT NULL DEFAULT NOW(),     -- quando qualquer coluna for atualizada
             display_choice     VARCHAR(20) NOT NULL DEFAULT 'indefinido',
