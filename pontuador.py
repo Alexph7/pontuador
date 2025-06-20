@@ -256,7 +256,7 @@ async def adicionar_usuario_db(
                       (user_id, username, first_name, last_name,
                        display_choice, nickname,
                        inserido_em, ultima_interacao, pontos, via_start)
-                    VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, 1, $8)
+                    VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, 3, $8)
                     """,
                     user_id, username, first_name, last_name,
                     display_choice, nickname, hoje_data_sp(), via_start
@@ -274,7 +274,7 @@ async def adicionar_usuario_db(
                 await conn.execute(
                     """
                     INSERT INTO historico_pontos (user_id, pontos, motivo)
-                    VALUES ($1, 1, 'ponto diário por interação')
+                    VALUES ($1, 3, 'ponto diário por interação')
                     """,
                     user_id
                 )
