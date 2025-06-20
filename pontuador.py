@@ -151,6 +151,11 @@ async def init_db_pool():
             PRIMARY KEY (rec_id, voter_id)
         );
 
+       CREATE TABLE IF NOT EXISTS ranking_recomendacoes (
+            user_id BIGINT PRIMARY KEY,
+            pontos  INTEGER NOT NULL DEFAULT 0
+        );
+
        CREATE TABLE IF NOT EXISTS usuario_history (
             id           SERIAL    PRIMARY KEY,
             user_id      BIGINT    NOT NULL REFERENCES usuarios(user_id) ON DELETE CASCADE,
@@ -353,7 +358,8 @@ async def setup_commands(app):
     try:
         comandos_basicos = [
             BotCommand("meus_pontos", "Ver sua pontuação e nível"),
-            BotCommand("ranking_top10", "Top 10 de usuários por pontos"),
+            BotCommand("ranking_top10", "Top 10 de usuários por pts"),
+            BotCommand("ranking_lives", "Top 8 de usuários por pts de lives"),
 
         ]
 
@@ -1758,6 +1764,45 @@ async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return await query.answer("✅ Voto registrado!", show_alert=True)
 
+async def atualizar_ranking_recomendacoes(user_id: int, pontos: int):
+    await pool.execute(
+        """
+        INSERT INTO ranking_recomendacoes (user_id, pontos)
+        VALUES ($1, $2)
+        ON CONFLICT (user_id)
+        DO UPDATE SET pontos = ranking_recomendacoes.pontos + EXCLUDED.pontos
+        """,
+        user_id, pontos
+    )
+
+async def ranking_lives(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rows = await pool.fetch(
+        """
+        SELECT r.user_id, r.pontos,
+               u.first_name, u.username, u.nickname, u.display_choice
+        FROM ranking_recomendacoes r
+        JOIN usuarios u ON u.user_id = r.user_id
+        ORDER BY r.pontos DESC
+        LIMIT 8
+        """
+    )
+
+    if not rows:
+        await update.message.reply_text("📭 Nenhuma live aprovada ainda.")
+        return
+
+    texto = "🏆 *Ranking de Lives Aprovadas*\n\n"
+    medalhas = ["🥇", "🥈", "🥉"] + ["🏅"] * 5
+
+    for i, row in enumerate(rows):
+        nome = (
+            row["first_name"] if row["display_choice"] == "first_name" else
+            row["nickname"] if row["display_choice"] == "nickname" else
+            row["username"] or "Usuário"
+        )
+        texto += f"{medalhas[i]} *{nome}* — {row['pontos']} pts\n"
+
+    await update.message.reply_text(texto, parse_mode="Markdown")
 
 async def on_startup(app):
     global ADMINS
@@ -1860,6 +1905,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(paginacao_via_start, pattern=r"^via_start:\d+$"))
     app.add_handler(CommandHandler('historico', historico))
     app.add_handler(CommandHandler('ranking_top10', ranking_top10))
+    app.add_handler(CommandHandler("ranking_lives", ranking_lives))
     app.add_handler(CommandHandler("historico_usuario", historico_usuario))
     app.add_handler(CommandHandler("listar_usuarios", listar_usuarios))
     app.add_handler(CommandHandler("listar_via_start", listar_via_start))
