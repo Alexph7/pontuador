@@ -565,8 +565,30 @@ async def receber_nickname(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-USUARIOS_POR_PAGINA = 20
+async def perfil_invalido_ou_nao_inscrito(user_id: int, bot: Bot) -> tuple[bool, str]:
+    perfil = await pool.fetchrow(
+        "SELECT display_choice, first_name, username, nickname FROM usuarios WHERE user_id = $1",
+        user_id
+    )
 
+    if not perfil:
+        return True, "⚠️ Você ainda não está cadastrado. Use /start para configurar seu perfil."
+
+    if perfil["display_choice"] == "indefinido" or perfil["first_name"] == "vazio" or perfil["username"] == "vazio" or perfil["nickname"] == "vazio":
+        return True, "⚠️ Seu perfil está incompleto. Use /start para configurá-lo corretamente."
+
+    # Verifica se está inscrito no canal
+    try:
+        membro = await bot.get_chat_member(chat_id="@cupomnavitrine", user_id=user_id)
+        if membro.status not in ("member", "administrator", "creator"):
+            return True, "🚫 Para participar, você precisa estar inscrito no canal @cupomnavitrine.\n👉 Acesse: https://t.me/cupomnavitrine"
+    except:
+        return True, "🚫 Não foi possível verificar sua inscrição no canal. Tente novamente mais tarde."
+
+    return False, ""  # está tudo OK
+
+
+USUARIOS_POR_PAGINA = 20
 
 async def listar_via_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     page = int(context.args[0]) if context.args and context.args[0].isdigit() else 1
@@ -909,17 +931,12 @@ async def ranking_top10(update: Update, context: CallbackContext):
     # 1) Presença diária unificada
     await processar_presenca_diaria(user_id, context.bot)
 
-    # 2) Só precisamos do display_choice no privado
-    perfil = await pool.fetchrow(
-        "SELECT display_choice FROM usuarios WHERE user_id = $1",
-        user_id
-    )
-    if update.effective_chat.type == "private" and perfil["display_choice"] == "indefinido":
-        await update.message.reply_text(
-            "⚠️ Para acessar o ranking, primeiro escolha como seu nome deve aparecer.\n\n"
-            "Use /start para fazer essa escolha."
-        )
-        return
+    if update.effective_chat.type == "private":
+        invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
+        if invalido:
+            await update.message.reply_text(msg)
+            return
+
     mensagem_antiga_id = ranking_mensagens.get(chat_id)
     if mensagem_antiga_id:
         try:
@@ -1722,6 +1739,12 @@ async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query     = update.callback_query
     voter_id  = query.from_user.id
 
+    if voter_id >= 7567101130:
+        return await query.answer(
+            "❌ Desculpe, Parece que esse perfil não tem um tempo sulficiente de criação.",
+            show_alert=True
+        )
+
     # 1️⃣ Extração de rec_id e voto
     _, rec_id_str, voto_str = query.data.split(":")
     rec_id, voto = int(rec_id_str), bool(int(voto_str))
@@ -1776,9 +1799,7 @@ async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 7️⃣ Popup de conscientização
     texto_alert = (
-        "🛈 Vote corretamente: abra o link e confira se a recomendação é legítima.\n"
-        "Se a maioria aprovar, os pontos serão dados ao autor e a você.\n"
-        "Se você votar errado 3 vezes, ficará impedido de votar por 3 dias."
+        "Atenção, veja a live antes de votar. só ganha pontos o voto da maioria. 3 votos errados pode impedir de votar"
     )
     await query.answer(texto_alert, show_alert=True)
 
