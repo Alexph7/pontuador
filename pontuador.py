@@ -151,6 +151,13 @@ async def init_db_pool():
             PRIMARY KEY (rec_id, voter_id)
         );
 
+       --- SQL para penalizações (execute uma vez no seu DB) ---
+       CREATE TABLE IF NOT EXISTS penalizacoes (
+         user_id     BIGINT PRIMARY KEY REFERENCES usuarios(user_id),
+         strikes     INTEGER NOT NULL DEFAULT 0,
+         bloqueado_ate TIMESTAMPTZ
+        );
+        
        CREATE TABLE IF NOT EXISTS ranking_recomendacoes (
             user_id BIGINT PRIMARY KEY,
             pontos  INTEGER NOT NULL DEFAULT 0
@@ -1701,68 +1708,138 @@ live_conv = ConversationHandler(
 
 
 async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    voter_id = query.from_user.id
+    query     = update.callback_query
+    voter_id  = query.from_user.id
 
-    # Extrai dados do callback
+    # 1️⃣ Extração de rec_id e voto
     _, rec_id_str, voto_str = query.data.split(":")
     rec_id, voto = int(rec_id_str), bool(int(voto_str))
 
-    # Busca recomendação
-    rec = await pool.fetchrow("SELECT user_id, moedas FROM recomendacoes WHERE id=$1", rec_id)
+    # 2️⃣ Verifica se o usuário está bloqueado por penalização
+    pen = await pool.fetchrow(
+        "SELECT strikes, bloqueado_ate FROM penalizacoes WHERE user_id = $1",
+        voter_id
+    )
+    agora = datetime.utcnow()
+    if pen and pen["bloqueado_ate"] and pen["bloqueado_ate"] > agora:
+        return await query.answer(
+            f"⛔ Você está impedido de votar até "
+            f"{pen['bloqueado_ate'].strftime('%d/%m/%Y %H:%M')}.",
+            show_alert=True
+        )
+
+    # 3️⃣ Busca recomendação
+    rec = await pool.fetchrow(
+        "SELECT user_id, moedas FROM recomendacoes WHERE id = $1",
+        rec_id
+    )
     if not rec:
         return await query.answer("❌ Recomendação não encontrada.", show_alert=True)
     if rec["user_id"] == voter_id:
         return await query.answer("❌ Você não pode votar em si mesmo.", show_alert=True)
 
-    # Verifica se já atingiu 3 votos
-    total = await pool.fetchval("SELECT COUNT(*) FROM recomendacao_votos WHERE rec_id=$1", rec_id)
-    if total >= 3:
-        return await query.answer("❌ Já existem 3 votos.", show_alert=True)
+    # 4️⃣ Verifica limite de 10 votos
+    total = await pool.fetchval(
+        "SELECT COUNT(*) FROM recomendacao_votos WHERE rec_id = $1",
+        rec_id
+    )
+    if total >= 10:
+        return await query.answer(
+            "❌ Já existem 10 votos. Período de votação encerrado.",
+            show_alert=True
+        )
 
-    # Verifica voto duplicado
+    # 5️⃣ Verifica voto duplicado
     dup = await pool.fetchval(
-        "SELECT 1 FROM recomendacao_votos WHERE rec_id=$1 AND voter_id=$2",
+        "SELECT 1 FROM recomendacao_votos WHERE rec_id = $1 AND voter_id = $2",
         rec_id, voter_id
     )
     if dup:
         return await query.answer("❌ Você já votou aqui.", show_alert=True)
 
-    # Registra o voto
+    # 6️⃣ Grava o voto
     await pool.execute(
         "INSERT INTO recomendacao_votos (rec_id, voter_id, voto) VALUES ($1, $2, $3)",
         rec_id, voter_id, voto
     )
 
-    # Conta votos
-    votos = await pool.fetch("SELECT voto FROM recomendacao_votos WHERE rec_id=$1", rec_id)
+    # 7️⃣ Popup de conscientização
+    texto_alert = (
+        "🛈 Vote corretamente: abra o link e confira se a recomendação é legítima.\n"
+        "Se a maioria aprovar, os pontos serão dados ao autor.\n"
+        "Se você votar errado 3 vezes, ficará impedido de votar por 3 dias."
+    )
+    await query.answer(texto_alert, show_alert=True)
+
+    # 8️⃣ Agenda revelação uma única vez
+    flag = f"reveal_scheduled:{rec_id}"
+    if not context.bot_data.get(flag):
+        context.bot_data[flag] = True
+        chat_id    = query.message.chat.id
+        message_id = query.message.message_id
+
+        async def revelar():
+            await asyncio.sleep(600)  # 10 minutos
+
+            votos = await pool.fetch(
+                "SELECT voto FROM recomendacao_votos WHERE rec_id = $1",
+                rec_id
+            )
+            positivos = sum(1 for v in votos if v["voto"])
+            negativos = len(votos) - positivos
+
+            teclado = InlineKeyboardMarkup([[
+                InlineKeyboardButton(f"👍 {positivos}", callback_data="noop"),
+                InlineKeyboardButton(f"👎 {negativos}", callback_data="noop"),
+            ]])
+            try:
+                await context.bot.edit_message_reply_markup(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    reply_markup=teclado
+                )
+            except:
+                pass
+
+        context.application.create_task(revelar())
+
+    # 9️⃣ Penalização de votos “errados”
+    # Só penaliza após haver ao menos 3 votos (para definir minoria)
+    votos = await pool.fetch("SELECT voto FROM recomendacao_votos WHERE rec_id = $1", rec_id)
     positivos = sum(1 for v in votos if v["voto"])
     negativos = len(votos) - positivos
 
-    # Atualiza botões com número de votos
-    novos_botoes = InlineKeyboardMarkup([[
-        InlineKeyboardButton(f"👍 {positivos}", callback_data=f"voto:{rec_id}:1"),
-        InlineKeyboardButton(f"👎 {negativos}", callback_data=f"voto:{rec_id}:0"),
-    ]])
-
-    try:
-        await query.edit_message_reply_markup(reply_markup=novos_botoes)
-    except:
-        pass  # ignora erros se não puder editar (mensagem muito antiga, etc)
-
-    # Se já tem 3 votos e ao menos 2 positivos, dá os pontos
-    if len(votos) == 3 and positivos >= 2:
-        pontos = rec["moedas"] * 10
-        await atualizar_pontos(rec["user_id"], pontos, "Live aprovada")
-        try:
-            await context.bot.send_message(
-                rec["user_id"],
-                f"🎉 Sua live recebeu {positivos} 👍 e você ganhou {pontos} pontos!"
+    # Se já houver maioria clara e o voter tiver votado contra ela:
+    if len(votos) >= 3:
+        maioria_positivo = positivos > negativos
+        # caso empate, não penaliza
+        if (maioria_positivo and not voto) or (not maioria_positivo and voto):
+            # incrementa strike
+            row = await pool.fetchrow(
+                """
+                INSERT INTO penalizacoes (user_id, strikes)
+                VALUES ($1, 1)
+                ON CONFLICT (user_id)
+                DO UPDATE SET strikes = penalizacoes.strikes + 1
+                RETURNING strikes
+                """,
+                voter_id
             )
-        except:
-            pass
+            strikes = row["strikes"]
+            # se atingir 3 strikes, bloqueia por 3 dias
+            if strikes >= 3:
+                bloqueado_ate = agora + timedelta(days=3)
+                await pool.execute(
+                    "UPDATE penalizacoes SET bloqueado_ate = $1 WHERE user_id = $2",
+                    bloqueado_ate, voter_id
+                )
+                # notifica no popup
+                await query.answer(
+                    "⛔ Você recebeu 3 strikes por votar contra a maioria "
+                    "e está bloqueado de votar por 3 dias.",
+                    show_alert=True
+                )
 
-    return await query.answer("✅ Voto registrado!", show_alert=True)
 
 async def atualizar_ranking_recomendacoes(user_id: int, pontos: int):
     await pool.execute(
