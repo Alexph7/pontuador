@@ -1731,7 +1731,7 @@ async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "SELECT strikes, bloqueado_ate FROM penalizacoes WHERE user_id = $1",
         voter_id
     )
-    agora = datetime.utcnow()
+    agora = hoje_hora_sp()
     if pen and pen["bloqueado_ate"] and pen["bloqueado_ate"] > agora:
         return await query.answer(
             f"⛔ Você está impedido de votar até "
