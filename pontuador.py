@@ -11,9 +11,8 @@ from asyncpg import UniqueViolationError, PostgresError, CannotConnectNowError, 
 import asyncio
 import io
 import math
-import datetime
+from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
-from datetime import datetime, date
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram import Update, Bot
 from telegram.constants import ParseMode
@@ -1683,11 +1682,23 @@ async def live_receive_moedas(update: Update, context: ContextTypes.DEFAULT_TYPE
     grupos = await pool.fetch("SELECT chat_id FROM grupos_recomendacao")
     for row in grupos:
         try:
-            await context.bot.send_message(
+            msg = await context.bot.send_message(
                 chat_id=row["chat_id"],
                 text=texto,
                 reply_markup=teclado,
                 parse_mode="Markdown"
+            )
+
+            # agenda exclusão da recomendação após 20 minutos (1200s)
+            async def apagar_recomendacao_later(chat_id, message_id):
+                await asyncio.sleep(1200)
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+                except:
+                    pass
+
+            context.application.create_task(
+                apagar_recomendacao_later(msg.chat_id, msg.message_id)
             )
         except:
             pass
@@ -1766,7 +1777,7 @@ async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 7️⃣ Popup de conscientização
     texto_alert = (
         "🛈 Vote corretamente: abra o link e confira se a recomendação é legítima.\n"
-        "Se a maioria aprovar, os pontos serão dados ao autor.\n"
+        "Se a maioria aprovar, os pontos serão dados ao autor e a você.\n"
         "Se você votar errado 3 vezes, ficará impedido de votar por 3 dias."
     )
     await query.answer(texto_alert, show_alert=True)
@@ -1779,7 +1790,7 @@ async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message_id = query.message.message_id
 
         async def revelar():
-            await asyncio.sleep(600)  # 10 minutos
+            await asyncio.sleep(360)  # tempo para reveçar os votos
 
             votos = await pool.fetch(
                 "SELECT voto FROM recomendacao_votos WHERE rec_id = $1",
@@ -1803,42 +1814,54 @@ async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         context.application.create_task(revelar())
 
-    # 9️⃣ Penalização de votos “errados”
-    # Só penaliza após haver ao menos 3 votos (para definir minoria)
-    votos = await pool.fetch("SELECT voto FROM recomendacao_votos WHERE rec_id = $1", rec_id)
+    # 9️⃣ Conta votos para decidir empate, pontos e penalização
+    votos = await pool.fetch(
+        "SELECT voto FROM recomendacao_votos WHERE rec_id = $1", rec_id
+    )
     positivos = sum(1 for v in votos if v["voto"])
     negativos = len(votos) - positivos
 
-    # Se já houver maioria clara e o voter tiver votado contra ela:
-    if len(votos) >= 3:
-        maioria_positivo = positivos > negativos
-        # caso empate, não penaliza
-        if (maioria_positivo and not voto) or (not maioria_positivo and voto):
-            # incrementa strike
-            row = await pool.fetchrow(
-                """
-                INSERT INTO penalizacoes (user_id, strikes)
-                VALUES ($1, 1)
-                ON CONFLICT (user_id)
-                DO UPDATE SET strikes = penalizacoes.strikes + 1
-                RETURNING strikes
-                """,
-                voter_id
+    # 9.1️⃣ Empate: nem pontos, nem penalização
+    if len(votos) >= 3 and positivos == negativos:
+        return await query.answer(
+            "⚖️ Houve empate na votação: nenhum ponto é dado e ninguém é penalizado.",
+            show_alert=True
+        )
+
+    # 9.2️⃣ Maioria positiva: concede pontos
+    if len(votos) >= 3 and positivos > negativos:
+        pontos = rec["moedas"] * 10
+        await atualizar_pontos(rec["user_id"], pontos, "Live aprovada")
+        # aqui você pode inserir também a lógica de atualizar ranking separado e notificar o autor
+        return
+
+    # 9.3️⃣ Maioria negativa: penaliza quem votou contra a maioria
+    if len(votos) >= 3 and negativos > positivos:
+        # incrementa strike
+        row = await pool.fetchrow(
+            """
+            INSERT INTO penalizacoes (user_id, strikes)
+            VALUES ($1, 1)
+            ON CONFLICT (user_id)
+            DO UPDATE SET strikes = penalizacoes.strikes + 1
+            RETURNING strikes
+            """,
+            voter_id
+        )
+        strikes = row["strikes"]
+        # se atingir 3 strikes, bloqueia por 3 dias
+        if strikes >= 3:
+            bloqueado_ate = agora + timedelta(days=3)
+            await pool.execute(
+                "UPDATE penalizacoes SET bloqueado_ate = $1 WHERE user_id = $2",
+                bloqueado_ate, voter_id
             )
-            strikes = row["strikes"]
-            # se atingir 3 strikes, bloqueia por 3 dias
-            if strikes >= 3:
-                bloqueado_ate = agora + timedelta(days=3)
-                await pool.execute(
-                    "UPDATE penalizacoes SET bloqueado_ate = $1 WHERE user_id = $2",
-                    bloqueado_ate, voter_id
-                )
-                # notifica no popup
-                await query.answer(
-                    "⛔ Você recebeu 3 strikes por votar contra a maioria "
-                    "e está bloqueado de votar por 3 dias.",
-                    show_alert=True
-                )
+            return await query.answer(
+                "⛔ Você recebeu 3 strikes por votar contra a maioria "
+                "e está bloqueado de votar por 3 dias.",
+                show_alert=True
+            )
+
 
 
 async def atualizar_ranking_recomendacoes(user_id: int, pontos: int):
