@@ -378,6 +378,7 @@ async def verificar_canal(user_id: int, bot: Bot) -> tuple[bool, str]:
 async def setup_commands(app):
     try:
         comandos_basicos = [
+            BotCommand("inicio", "Volte ao começo"),
             BotCommand("meus_pontos", "Ver sua pontuação e nível"),
             BotCommand("ranking_top10", "Top 10 de usuários por pts"),
             BotCommand("ranking_lives", "Top 8 de usuários por pts de lives"),
@@ -406,6 +407,34 @@ async def setup_commands(app):
         logger.info("Comandos configurados para público e privado.")
     except Exception:
         logger.exception("Erro ao configurar comandos")
+
+
+COMANDOS_PUBLICOS = [
+    ("/meus_pontos", "Ver sua pontuação e nível"),
+    ("/historico", "Mostrar seu histórico de pontos"),
+    ("/live", "Enviar link de live com moedas"),
+    ("/ranking_top10", "Top 10 de usuários por pontos"),
+    ("/ranking_lives", "Top 8 de usuários por pontos de lives"),
+    ("/como_ganhar", "Como ganhar mais pontos"),
+    ("/nossos_bots", "Confira outros bots"),
+    ("/news", "Ver Novas Atualizações"),
+]
+
+async def inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    # Verifica canal e perfil (reutilizando sua função)
+    invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
+    if invalido:
+        await update.message.reply_text(msg)
+        return
+
+    # Monta o texto do menu de comandos públicos
+    texto_menu = "👋 Olá! Aqui estão os comandos que você pode usar:\n\n"
+    for cmd, desc in COMANDOS_PUBLICOS:
+        texto_menu += f"{cmd} — {desc}\n"
+
+    await update.message.reply_text(texto_menu)
 
 
 ADMIN_MENU = (
@@ -509,6 +538,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f" Para começar, caso você alcance o Ranking, como você gostaria de aparecer?",
         reply_markup=keyboard
     )
+    await inicio(update, context)
     return ESCOLHENDO_DISPLAY
 
 
@@ -2036,6 +2066,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(tratar_voto, pattern=r"^voto:\d+:[01]$"))
     app.add_handler(CommandHandler("registrar_grupo", registrar_grupo, filters=filters.ChatType.GROUPS))
 
+
     app.add_handler(
         ConversationHandler(
             entry_points=[CommandHandler("start", start, filters=filters.ChatType.PRIVATE)],
@@ -2053,19 +2084,21 @@ async def main():
         )
     )
 
+    app.add_handler(CommandHandler("inicio", inicio, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('admin', admin, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('meus_pontos', meus_pontos))
-    app.add_handler(CommandHandler('como_ganhar', como_ganhar))
+    app.add_handler(CommandHandler('historico', historico, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(callback_historico, pattern=r"^hist:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(paginacao_via_start, pattern=r"^via_start:\d+$"))
-    app.add_handler(CommandHandler('historico', historico))
+
     app.add_handler(CommandHandler('ranking_top10', ranking_top10))
     app.add_handler(CommandHandler("ranking_lives", ranking_lives))
-    app.add_handler(CommandHandler("historico_usuario", historico_usuario))
-    app.add_handler(CommandHandler("listar_usuarios", listar_usuarios))
-    app.add_handler(CommandHandler("listar_via_start", listar_via_start))
-    app.add_handler(CommandHandler("estatisticas", estatisticas))
-    app.add_handler(CommandHandler("news", news))
+    app.add_handler(CommandHandler("historico_usuario", historico_usuario, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("listar_usuarios", listar_usuarios, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("listar_via_start", listar_via_start, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("estatisticas", estatisticas, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler('como_ganhar', como_ganhar, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("news", news, filters=filters.ChatType.PRIVATE))
 
     # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
