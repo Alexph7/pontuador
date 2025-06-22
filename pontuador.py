@@ -359,6 +359,22 @@ async def setup_bot_description(app):
         logger.exception("Erro ao definir descrições do bot")
 
 
+async def verificar_canal(user_id: int, bot: Bot) -> tuple[bool, str]:
+    try:
+        membro = await bot.get_chat_member(chat_id="@cupomnavitrine", user_id=user_id)
+        if membro.status not in ("member", "administrator", "creator"):
+            return False, (
+                "🚫 Para usar esse recurso, você precisa estar inscrito no canal @cupomnavitrine.\n"
+                "👉 Acesse: https://t.me/cupomnavitrine"
+            )
+        return True, ""
+    except:
+        return False, (
+            "🚫 Não foi possível verificar sua inscrição no canal.\n"
+            "Tente novamente mais tarde."
+        )
+
+
 async def setup_commands(app):
     try:
         comandos_basicos = [
@@ -467,10 +483,11 @@ ESCOLHENDO_DISPLAY, DIGITANDO_NICK = range(2)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
-    perfil_antigo = await pool.fetchrow(
-        "SELECT 1 FROM usuarios WHERE user_id = $1",
-        user.id
-    )
+    # 🔒 Verifica se está no canal
+    ok, msg = await verificar_canal(user.id, context.bot)
+    if not ok:
+        await update.message.reply_text(msg)
+        return ConversationHandler.END
 
     # 1) Verifica se já existe registro; só insere uma vez
     await obter_ou_criar_usuario_db(
@@ -565,6 +582,11 @@ async def receber_nickname(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def perfil_invalido_ou_nao_inscrito(user_id: int, bot: Bot) -> tuple[bool, str]:
+    # 1️⃣ Verifica se está no canal, usando o méto do já pronto
+    ok, msg = await verificar_canal(user_id, bot)
+    if not ok:
+        return True, msg
+
     perfil = await pool.fetchrow(
         "SELECT display_choice, first_name, username, nickname FROM usuarios WHERE user_id = $1",
         user_id
@@ -575,14 +597,6 @@ async def perfil_invalido_ou_nao_inscrito(user_id: int, bot: Bot) -> tuple[bool,
 
     if perfil["display_choice"] == "indefinido":
         return True, "⚠️ Seu perfil está incompleto. Use /start para configurá-lo corretamente."
-
-    # Verifica se está inscrito no canal
-    try:
-        membro = await bot.get_chat_member(chat_id="@cupomnavitrine", user_id=user_id)
-        if membro.status not in ("member", "administrator", "creator"):
-            return True, "🚫 Para participar, você precisa estar inscrito no canal @cupomnavitrine.\n👉 Acesse: https://t.me/cupomnavitrine"
-    except:
-        return True, "🚫 Não foi possível verificar sua inscrição no canal. Tente novamente mais tarde."
 
     return False, ""  # está tudo OK
 
@@ -656,6 +670,13 @@ async def paginacao_via_start(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def meus_pontos(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
+
+    # Usa a função reutilizável para verificar se o usuário está no canal
+    ok, msg = await verificar_canal(user_id, context.bot)
+    if not ok:
+        await update.message.reply_text(msg)
+        return
+
     try:
         # 1) Processa presença diária (vai dar 1 ponto se ainda não pontuou hoje)
         await processar_presenca_diaria(user_id, context.bot)
@@ -691,6 +712,13 @@ async def meus_pontos(update: Update, context: CallbackContext):
 
 
 async def como_ganhar(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    # Usa a função reutilizável para verificar se o usuário está no canal
+    ok, msg = await verificar_canal(user_id, context.bot)
+    if not ok:
+        await update.message.reply_text(msg)
+        return
+
     # Ordena os brindes por nível de pontos
     brindes_texto = "\n".join(
         f"• {pontos} pontos – {descricao}"
@@ -1623,6 +1651,13 @@ async def registrar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # 1️⃣ Handler do comando /live
 async def live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.effective_user.id
+
+    ok, msg = await verificar_canal(user_id, context.bot)
+    if not ok:
+        await update.message.reply_text(msg)
+        return ConversationHandler.END  # ou return -1, depende do seu fluxo
+
     await update.message.reply_text(
         "📎 Por favor, envie o link da live.\n"
         "Deve começar com `br.shp.ee`, Geralmente é melhor sugerir lives que estão prestes a liberar moedas, para que dê tempo."
