@@ -343,22 +343,6 @@ def escape_markdown_v2(text: str) -> str:
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
 
-# Mensagem de Mural de Entrada
-async def setup_bot_description(app):
-    try:
-        await app.bot.set_my_short_description(
-            short_description="🤖 Olá! Sou um bot do @cupomnavitrine – Gerenciador de pontuação.",
-            language_code="pt"
-        )
-        await app.bot.set_my_description(
-            description="🤖 Se inscreva em nosso canal @cupomnavitrine –",
-            language_code="pt"
-        )
-        logger.info("Descrições do bot definidas com sucesso.")
-    except Exception:
-        logger.exception("Erro ao definir descrições do bot")
-
-
 async def verificar_canal(user_id: int, bot: Bot) -> tuple[bool, str]:
     try:
         membro = await bot.get_chat_member(chat_id="@cupomnavitrine", user_id=user_id)
@@ -416,7 +400,6 @@ COMANDOS_PUBLICOS = [
     ("/ranking_top10", "Top 10 de usuários por pontos"),
     ("/ranking_lives", "Top 8 de usuários por pontos de lives"),
     ("/como_ganhar", "Como ganhar mais pontos"),
-    ("/nossos_bots", "Confira outros bots"),
     ("/news", "Ver Novas Atualizações"),
 ]
 
@@ -2057,7 +2040,6 @@ async def main():
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
-        .post_init(setup_bot_description)
         .post_init(setup_commands)
         .build()
     )
