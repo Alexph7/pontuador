@@ -104,7 +104,6 @@ async def init_db_pool():
             last_name          TEXT NOT NULL DEFAULT 'vazio',
             pontos             INTEGER NOT NULL DEFAULT 0,
             nivel_atingido     INTEGER NOT NULL DEFAULT 0,
-            is_pontuador       BOOLEAN NOT NULL DEFAULT FALSE,
             ultima_interacao   DATE,                                
             inserido_em        TIMESTAMPTZ NOT NULL DEFAULT NOW(),    -- quando o usuário foi inserido
             atualizado_em      TIMESTAMPTZ NOT NULL DEFAULT NOW(),     -- quando qualquer coluna for atualizada
@@ -574,7 +573,7 @@ async def perfil_invalido_ou_nao_inscrito(user_id: int, bot: Bot) -> tuple[bool,
     if not perfil:
         return True, "⚠️ Você ainda não está cadastrado. Use /start para configurar seu perfil."
 
-    if perfil["display_choice"] == "indefinido" or perfil["first_name"] == "vazio" or perfil["username"] == "vazio" or perfil["nickname"] == "vazio":
+    if perfil["display_choice"] == "indefinido":
         return True, "⚠️ Seu perfil está incompleto. Use /start para configurá-lo corretamente."
 
     # Verifica se está inscrito no canal
