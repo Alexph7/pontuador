@@ -1733,7 +1733,7 @@ async def live_receive_moedas(update: Update, context: ContextTypes.DEFAULT_TYPE
     rec_id = rec["id"]
 
     texto = (
-        f"📣 *{nome}* recomendou uma live por *{moedas} moedas!*\n"
+        f"📣 *{nome}* recomendou uma live com *{moedas} moedas!*\n"
         f"🔗 {link}\n\n"
         "Esta recomendação é verdadeira? Vote e ganhe pontos também!"
     )
@@ -1780,14 +1780,30 @@ live_conv = ConversationHandler(
     allow_reentry=True
 )
 
+MIN_PONTOS_PARA_VOTAR = 6
 
 async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query     = update.callback_query
     voter_id  = query.from_user.id
 
+    #Corte por ID
     if voter_id >= 7567101130:
         return await query.answer(
-            "❌ Desculpe, Parece que esse perfil não tem um tempo sulficiente de criação.",
+            "❌ Desculpe, este perfil é muito novo para votar..",
+            show_alert=True
+        )
+
+    # ✅ Verifica se tem pontos suficientes
+    pontos_atuais = await pool.fetchval(
+        "SELECT pontos_total FROM usuarios WHERE user_id = $1",
+        voter_id
+    ) or 0
+
+    if pontos_atuais < MIN_PONTOS_PARA_VOTAR:
+        faltam = MIN_PONTOS_PARA_VOTAR - pontos_atuais
+        return await query.answer(
+            f"🔒 Você precisa de pelo menos {MIN_PONTOS_PARA_VOTAR} pontos para votar.\n"
+            f"Faltam {faltam} ponto(s). Interaja com o bot para ganhar mais pontos.",
             show_alert=True
         )
 
