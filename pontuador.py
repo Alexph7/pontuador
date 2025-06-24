@@ -1022,17 +1022,33 @@ async def ranking_top10(update: Update, context: CallbackContext):
     ranking_mensagens[chat_id] = msg.message_id
 
 
-async def tratar_presenca(update, context):
+async def tratar_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user is None or user.is_bot:
         return
-    # Agora só chamamos a função unificada
-    await processar_presenca_diaria(user.id, context.bot)
 
+    await processar_presenca_diaria(
+        user_id=user.id,
+        username=user.username or "vazio",
+        first_name=user.first_name or "vazio",
+        last_name=user.last_name or "vazio",
+        bot=context.bot
+    )
 
-async def processar_presenca_diaria(user_id: int, bot: Bot) -> int | None:
-    # Garante que o usuário exista
-    perfil = await obter_ou_criar_usuario_db(user_id, "", "", "")
+async def processar_presenca_diaria(
+    user_id: int,
+    username: str,
+    first_name: str,
+    last_name: str,
+    bot: Bot
+) -> int | None:
+    perfil = await obter_ou_criar_usuario_db(
+        user_id=user_id,
+        username=username or "vazio",
+        first_name=first_name or "vazio",
+        last_name=last_name or "vazio",
+        via_start=False  # Porque foi no grupo
+    )
     # Se ainda não pontuou hoje…
     if perfil["ultima_interacao"] != hoje_data_sp():
         # Dá 1 ponto e atualiza última interação
