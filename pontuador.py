@@ -140,7 +140,7 @@ async def init_db_pool():
             criada_em       TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
         
-        -- 2) Armazena os votos, um por usuário, máximo 3 por recomendação
+        -- 2) Armazena os votos
        CREATE TABLE IF NOT EXISTS recomendacao_votos (
             rec_id      INTEGER     NOT NULL REFERENCES recomendacoes(id) ON DELETE CASCADE,
             voter_id    BIGINT      NOT NULL,                     -- quem votou
@@ -246,7 +246,7 @@ async def adicionar_usuario_db(
                         await conn.execute(
                             """
                             UPDATE usuarios
-                               SET pontos = pontos + 3,
+                               SET pontos = pontos + 5,
                                    ultima_interacao = $1
                              WHERE user_id = $2::bigint
                             """,
@@ -256,7 +256,7 @@ async def adicionar_usuario_db(
                             """
                             INSERT INTO historico_pontos
                               (user_id, pontos, motivo)
-                            VALUES ($1::bigint, 3, 'ponto diário por interação')
+                            VALUES ($1::bigint, 5, 'ponto diário por interação')
                             """,
                             user_id
                         )
@@ -272,7 +272,7 @@ async def adicionar_usuario_db(
                       (user_id, username, first_name, last_name,
                        display_choice, nickname,
                        inserido_em, ultima_interacao, pontos, via_start)
-                    VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, 3, $8)
+                    VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, 5, $8)
                     """,
                     user_id, username, first_name, last_name,
                     display_choice, nickname, hoje_data_sp(), via_start
@@ -290,18 +290,18 @@ async def adicionar_usuario_db(
                 await conn.execute(
                     """
                     INSERT INTO historico_pontos (user_id, pontos, motivo)
-                    VALUES ($1, 3, 'ponto diário por interação')
+                    VALUES ($1, 5, 'ponto diário por interação')
                     """,
                     user_id
                 )
 
 
 async def obter_ou_criar_usuario_db(
-        user_id: int,
-        username: str,
-        first_name: str,
-        last_name: str,
-        via_start: bool = False
+    user_id: int,
+    username: str    = "vazio",
+    first_name: str  = "vazio",
+    last_name: str   = "vazio",
+    via_start: bool  = False
 ):
     perfil = await pool.fetchrow("SELECT * FROM usuarios WHERE user_id = $1", user_id)
 
@@ -402,21 +402,12 @@ COMANDOS_PUBLICOS = [
     ("/news", "Ver Novas Atualizações"),
 ]
 
-async def inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-
-    # Verifica canal e perfil (reutilizando sua função)
-    invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
-    if invalido:
-        await update.message.reply_text(msg)
-        return
-
-    # Monta o texto do menu de comandos públicos
+async def enviar_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     texto_menu = "👋 Olá! Aqui estão os comandos que você pode usar:\n\n"
     for cmd, desc in COMANDOS_PUBLICOS:
         texto_menu += f"{cmd} — {desc}\n"
-
-    await update.message.reply_text(texto_menu)
+    await context.bot.send_message(chat_id=chat_id, text=texto_menu)
 
 
 ADMIN_MENU = (
@@ -541,7 +532,7 @@ async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TY
         )
         await query.edit_message_text(
             "👍 Ok, você aparecerá com seu nome normal, para prosseguir escolha uma opção no menu a seguir ou ao lado.")
-       # await inicio(update, context)
+        await enviar_menu(query.message.chat_id, context.bot)
         return ConversationHandler.END
 
     # 2️⃣ Se for “nickname”, pede o nick e vai pro estado DIGITANDO_NICK
@@ -569,7 +560,7 @@ async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TY
             "Agora escolha uma opção no menu a seguir ou ao lado.",
             parse_mode=ParseMode.HTML
         )
-#        await inicio(update, context)
+        await enviar_menu(query.message.chat_id, context.bot)
         return ConversationHandler.END
 
     # (Opcional) se vier qualquer outra callback_data
@@ -591,7 +582,7 @@ async def receber_nickname(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"✅ Nickname salvo: '' **{nick}** '', agora para prosseguir escolha uma opção a seguir ou no menu ao lado",
         parse_mode="Markdown")
-    # await inicio(update, context)
+    await enviar_menu(update.message.chat_id, context.bot)
     return ConversationHandler.END
 
 
@@ -1036,11 +1027,11 @@ async def tratar_presenca(update, context):
 
 async def processar_presenca_diaria(user_id: int, bot: Bot) -> int | None:
     # Garante que o usuário exista
-    perfil = await obter_ou_criar_usuario_db(user_id, "", "", "")
+    perfil = await obter_ou_criar_usuario_db(user_id)
     # Se ainda não pontuou hoje…
     if perfil["ultima_interacao"] != hoje_data_sp():
         # Dá 1 ponto e atualiza última interação
-        novo_total = await atualizar_pontos(user_id, 3, "Presença diária", bot)
+        novo_total = await atualizar_pontos(user_id, 5, "Pontos diário por interação", bot)
         await pool.execute(
             "UPDATE usuarios SET ultima_interacao = $1 WHERE user_id = $2::bigint",
             hoje_data_sp(), user_id
@@ -2067,7 +2058,7 @@ async def main():
         )
     )
 
-    app.add_handler(CommandHandler("inicio", inicio, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("inicio", enviar_menu, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('admin', admin, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('meus_pontos', meus_pontos))
     app.add_handler(CommandHandler('historico', historico, filters=filters.ChatType.PRIVATE))
