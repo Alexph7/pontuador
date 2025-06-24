@@ -13,7 +13,7 @@ import io
 import math
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, User
 from telegram import Update, Bot
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
@@ -402,12 +402,17 @@ COMANDOS_PUBLICOS = [
     ("/news", "Ver Novas Atualizações"),
 ]
 
-async def enviar_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
+async def enviar_menu(chat_id: int, bot):
     texto_menu = "👋 Olá! Aqui estão os comandos que você pode usar:\n\n"
     for cmd, desc in COMANDOS_PUBLICOS:
         texto_menu += f"{cmd} — {desc}\n"
-    await context.bot.send_message(chat_id=chat_id, text=texto_menu)
+    await bot.send_message(chat_id=chat_id, text=texto_menu)
+
+# mantém enviar_menu(chat_id: int, bot: Bot) do jeito que você já definiu
+
+async def cmd_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # só repassa para enviar_menu
+    await enviar_menu(update.effective_chat.id, context.bot)
 
 
 ADMIN_MENU = (
@@ -532,7 +537,7 @@ async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TY
         )
         await query.edit_message_text(
             "👍 Ok, você aparecerá com seu nome normal, para prosseguir escolha uma opção no menu a seguir ou ao lado.")
-        await enviar_menu(query.message.chat_id, context.bot)
+        await enviar_menu(query.message.chat.id, context.bot)
         return ConversationHandler.END
 
     # 2️⃣ Se for “nickname”, pede o nick e vai pro estado DIGITANDO_NICK
@@ -560,7 +565,7 @@ async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TY
             "Agora escolha uma opção no menu a seguir ou ao lado.",
             parse_mode=ParseMode.HTML
         )
-        await enviar_menu(query.message.chat_id, context.bot)
+        await enviar_menu(query.message.chat.id, context.bot)
         return ConversationHandler.END
 
     # (Opcional) se vier qualquer outra callback_data
@@ -582,7 +587,7 @@ async def receber_nickname(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"✅ Nickname salvo: '' **{nick}** '', agora para prosseguir escolha uma opção a seguir ou no menu ao lado",
         parse_mode="Markdown")
-    await enviar_menu(update.message.chat_id, context.bot)
+    await enviar_menu(update.effective_chat.id, context.bot)
     return ConversationHandler.END
 
 
@@ -1027,11 +1032,11 @@ async def tratar_presenca(update, context):
 
 async def processar_presenca_diaria(user_id: int, bot: Bot) -> int | None:
     # Garante que o usuário exista
-    perfil = await obter_ou_criar_usuario_db(user_id)
+    perfil = await obter_ou_criar_usuario_db(user_id, "", "", "")
     # Se ainda não pontuou hoje…
     if perfil["ultima_interacao"] != hoje_data_sp():
         # Dá 1 ponto e atualiza última interação
-        novo_total = await atualizar_pontos(user_id, 5, "Pontos diário por interação", bot)
+        novo_total = await atualizar_pontos(user_id, 3, "Presença diária", bot)
         await pool.execute(
             "UPDATE usuarios SET ultima_interacao = $1 WHERE user_id = $2::bigint",
             hoje_data_sp(), user_id
@@ -1780,7 +1785,7 @@ live_conv = ConversationHandler(
     allow_reentry=True
 )
 
-MIN_PONTOS_PARA_VOTAR = 6
+MIN_PONTOS_PARA_VOTAR = 16
 
 async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query     = update.callback_query
@@ -1795,7 +1800,7 @@ async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ✅ Verifica se tem pontos suficientes
     pontos_atuais = await pool.fetchval(
-        "SELECT pontos_total FROM usuarios WHERE user_id = $1",
+        "SELECT pontos FROM usuarios WHERE user_id = $1",
         voter_id
     ) or 0
 
@@ -1803,7 +1808,7 @@ async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         faltam = MIN_PONTOS_PARA_VOTAR - pontos_atuais
         return await query.answer(
             f"🔒 Você precisa de pelo menos {MIN_PONTOS_PARA_VOTAR} pontos para votar.\n"
-            f"Faltam {faltam} ponto(s). Interaja com o bot para ganhar mais pontos.",
+            f"Faltam {faltam} ponto(s). Interaja com o bot para ganhar mais pontos. /como_ganhar",
             show_alert=True
         )
 
@@ -2081,7 +2086,7 @@ async def main():
         )
     )
 
-    app.add_handler(CommandHandler("inicio", enviar_menu, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("inicio", cmd_inicio, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('admin', admin, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('meus_pontos', meus_pontos))
     app.add_handler(CommandHandler('historico', historico, filters=filters.ChatType.PRIVATE))
