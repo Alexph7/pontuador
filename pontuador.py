@@ -419,7 +419,7 @@ ADMIN_MENU = (
     "/listar_usuarios – lista de usuarios cadastrados\n"
     "/estatisticas – quantidade total de usuarios cadastrados\n"
     "/listar_via_start – usuario que se cadastraram via start\n"
-    "/registrar_grupo – onde as mensagens de links de lives serao enviadas\n"
+    "/registrar – Registrar grupo onde as mensagens de links de lives serao enviadas\n"
 )
 
 
@@ -1639,6 +1639,12 @@ async def estatisticas(update: Update, context: ContextTypes.DEFAULT_TYPE):
 LIVE_LINK, LIVE_MOEDAS = range(2)
 
 async def registrar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if user_id not in ADMINS:
+        return
+
+    # continua usando chat como antes
     chat = update.effective_chat
 
     if chat.type in ("group", "supergroup"):
@@ -1654,6 +1660,7 @@ async def registrar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ Este comando só pode ser usado em grupos.")
 
+
 # 1️⃣ Handler do comando /live
 async def live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
@@ -1665,7 +1672,7 @@ async def live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     await update.message.reply_text(
         "📎 Por favor, envie o link da live.\n"
-        "Deve começar com `br.shp.ee`, Geralmente é melhor sugerir lives que estão prestes a liberar moedas, para que dê tempo."
+        "Deve começar com `br.shp.`, É melhor sugerir lives que estão prestes a liberar moedas, para dar tempo."
     )
     return LIVE_LINK
 
@@ -2038,7 +2045,7 @@ async def main():
     app.add_handler(main_conv)
     app.add_handler(live_conv)
     app.add_handler(CallbackQueryHandler(tratar_voto, pattern=r"^voto:\d+:[01]$"))
-    app.add_handler(CommandHandler("registrar_grupo", registrar_grupo, filters=filters.ChatType.GROUPS))
+    app.add_handler(CommandHandler("registrar", registrar_grupo, filters=filters.ChatType.GROUPS))
 
 
     app.add_handler(
