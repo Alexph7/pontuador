@@ -256,7 +256,7 @@ async def adicionar_usuario_db(
                             """
                             INSERT INTO historico_pontos
                               (user_id, pontos, motivo)
-                            VALUES ($1::bigint, 5, 'ponto diário por interação')
+                            VALUES ($1::bigint, 5, 'Check-in diário')
                             """,
                             user_id
                         )
@@ -290,7 +290,7 @@ async def adicionar_usuario_db(
                 await conn.execute(
                     """
                     INSERT INTO historico_pontos (user_id, pontos, motivo)
-                    VALUES ($1, 5, 'ponto diário por interação')
+                    VALUES ($1, 5, 'Check-in diário')
                     """,
                     user_id
                 )
@@ -753,21 +753,21 @@ async def como_ganhar(update: Update, context: CallbackContext):
 
 async def news(update: Update, context: CallbackContext):
     await update.message.reply_text(
-        "🆕 *Novidades* (20 Junho 2025)\n\n"
-        "Nova interação e ranking para lives, toque em /live e recomende um link \n"
-        "no qual há live que irá sair moedas, no minimo 5\n"
-        "você ganha pontos 10x o valor de moedas, exemplo: live com 5 moedas = 50 pontos\n"
-        "os links serão enviados ao grupo e outros usuarios vão votar\n"
+        "🆕 *Novidades* (Junho 2025)\n\n"
+        "Nova interação e ranking para lives, toque em /live e recomende um link \n\n"
+        "no qual há live que irá sair moedas, no minimo 5\n\n"
+        "você ganha pontos 10x o valor de moedas, exemplo: live com 5 moedas = 50 pontos\n\n"
+        "os links serão enviados ao grupo e outros usuarios vão votar\n\n"
         "3 usuarios aleatorios poderao votar em positivo ou negativo 👍 ou 👎 \n"
-        "conseguindo 2 votos os pontos serão adicionados, e votando em alguma recomendação vc ganha 10 pontos\n"
+        "conseguindo 2 votos os pontos serão adicionados, e votando em alguma recomendação vc ganha 10 pontos\n\n"
         "não conseguirá votar na própria recomendação, nem recomendar a mesma live duas vezes com mesmo link\n\n"
         "os melhores colocados no ranking ganham prêmio\n"
         "1ª lugar: R$80 em compras\n"
         "2ª lugar: R$50 em compras\n"
         "3ª lugar: R$30 em compras\n"
-        "4ª ao 8ª lugar: R$19 em compras\n"
+        "4ª ao 8ª lugar: R$19 em compras.\n\n"
         "Fora do bot, pode recomendar lives digitando o link e a quantidade de moedas\n"
-        "exemplo: 'Vai sair 7 moedas na live -br.shp.ee ...' \n\n\n",
+        "exemplo:\n 'Vai sair 7 moedas na live -[LINK] ...' \n\n",
         parse_mode="Markdown"
     )
 
