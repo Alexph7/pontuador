@@ -417,10 +417,10 @@ async def cmd_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 ADMIN_MENU = (
     "🔧 *Menu Admin* 🔧\n\n"
-    "/add_pontos – Atribuir pontos a um usuário\n"
-    "/del_pontos – remover pontos de um usuário\n"
+    "/add - atribuir pontos a um usuário\n"
+    "/del – remover pontos de um usuário\n"
     "/historico_usuario – historico de nomes do usuário\n"
-    "/rem_admin – remover admin\n"
+    "/rem – remover admin\n"
     "/listar_usuarios – lista de usuarios cadastrados\n"
     "/estatisticas – quantidade total de usuarios cadastrados\n"
     "/listar_via_start – usuario que se cadastraram via start\n"
@@ -972,11 +972,21 @@ async def historico(update: Update, context: CallbackContext):
 
 
 async def ranking_top10(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
+    user = update.effective_user
+    user_id    = user.id
+    username   = user.username   or ""
+    first_name = user.first_name or ""
+    last_name  = user.last_name  or ""
+    chat_id    = update.effective_chat.id
 
-    # 1) Presença diária unificada
-    await processar_presenca_diaria(user_id, context.bot)
+    # 1) Presença diária unificada — agora com 5 args:
+    await processar_presenca_diaria(
+        user_id,
+        username,
+        first_name,
+        last_name,
+        context.bot
+    )
 
     if update.effective_chat.type == "private":
         invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
@@ -1071,12 +1081,13 @@ async def processar_presenca_diaria(
     return None
 
 
-async def cancelar(update: Update, conText: ContextTypes.DEFAULT_TYPE):
+async def cancel(update: Update, conText: ContextTypes.DEFAULT_TYPE):
     # Limpa tudo que já havia sido armazenado
     conText.user_data.clear()
     await update.message.reply_text(
         "❌ Operação cancelada. Nenhum dado foi salvo."
     )
+    return ConversationHandler.END
     return ConversationHandler.END
 
 
@@ -1802,14 +1813,22 @@ async def live_receive_moedas(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # 4️⃣ Registro no ApplicationBuilder
 live_conv = ConversationHandler(
-    entry_points=[CommandHandler('live', live, filters=filters.ChatType.PRIVATE)],
+    entry_points=[ CommandHandler('live', live, filters=filters.ChatType.PRIVATE) ],
     states={
-        LIVE_LINK:   [MessageHandler(filters.TEXT & ~filters.COMMAND, live_receive_link)],
-        LIVE_MOEDAS: [MessageHandler(filters.TEXT & ~filters.COMMAND, live_receive_moedas)],
+        LIVE_LINK:   [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, live_receive_link),
+            # você já tem aqui o cancelar via regex, mas não é estritamente necessário
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancel),
+        ],
+        LIVE_MOEDAS: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, live_receive_moedas),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancel),
+        ],
     },
-    fallbacks=[CommandHandler('cancelar', lambda u, c: ConversationHandler.END)],
-    allow_reentry=True
+    fallbacks=[CommandHandler("cancelar", cancel)],
+    allow_reentry=True,
 )
+
 
 MIN_PONTOS_PARA_VOTAR = 16
 
@@ -2028,49 +2047,49 @@ async def on_startup(app):
 main_conv = ConversationHandler(
     entry_points=[
         CommandHandler("admin", admin, filters=filters.ChatType.PRIVATE),
-        CommandHandler("add_pontos", add_pontos),
-        CommandHandler("del_pontos", del_pontos),
+        CommandHandler("add", add_pontos),
+        CommandHandler("del", del_pontos),
         CommandHandler("rem_admin", rem_admin),
     ],
     states={
         # /admin → senha
         ADMIN_SENHA: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, tratar_senha),
-            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancel),
         ],
         # /add_pontos → id, qtd, motivo
         ADD_PONTOS_POR_ID: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, add_pontos_IDuser),
-            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancel),
         ],
         ADD_PONTOS_QTD: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, add_pontos_quantidade),
-            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancel),
         ],
         ADD_PONTOS_MOTIVO: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, add_pontos_motivo),
-            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancel),
         ],
 
         DEL_PONTOS_ID: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, del_pontos_IDuser),
-            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancel),
         ],
         DEL_PONTOS_QTD: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, del_pontos_quantidade),
-            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancel),
         ],
         DEL_PONTOS_MOTIVO: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, del_pontos_motivo),
-            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancel),
         ],
         # # /add_admin → id
         REM_ADMIN_ID: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, rem_admin_execute),
-            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar),
+            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancel),
         ],
     },
-    fallbacks=[CommandHandler("cancelar", cancelar)],
+    fallbacks=[CommandHandler("cancelar", cancel)],
     allow_reentry=True,
 )
 
@@ -2104,10 +2123,10 @@ async def main():
                 ],
                 DIGITANDO_NICK: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nickname),
-                    MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancelar)
+                    MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancel)
                 ],
             },
-            fallbacks=[CommandHandler("cancelar", cancelar)],
+            fallbacks=[CommandHandler("cancelar", cancel)],
             allow_reentry=True,
         )
     )
@@ -2119,9 +2138,9 @@ async def main():
     app.add_handler(CallbackQueryHandler(callback_historico, pattern=r"^hist:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(paginacao_via_start, pattern=r"^via_start:\d+$"))
 
-    app.add_handler(CommandHandler('ranking_top10', ranking_top10))
-    app.add_handler(CommandHandler("ranking_lives", ranking_lives))
-    app.add_handler(CommandHandler("historico_usuario", historico_usuario, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler('rank_top10', ranking_top10))
+    app.add_handler(CommandHandler("rank_lives", ranking_lives))
+    app.add_handler(CommandHandler("historico_user", historico_usuario, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("listar_usuarios", listar_usuarios, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("listar_via_start", listar_via_start, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("estatisticas", estatisticas, filters=filters.ChatType.PRIVATE))
