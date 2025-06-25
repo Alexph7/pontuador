@@ -88,8 +88,8 @@ NIVEIS_BRINDES = {
 
 TEMPO_LIMITE_BUSCA = 10  # Tempo máximo (em segundos) para consulta
 
-ranking_mensagens = {}
-
+ranking_mensagens_top10 = {}
+ranking_mensagens_lives = {}
 
 async def init_db_pool():
     global pool, ADMINS
@@ -994,7 +994,7 @@ async def ranking_top10(update: Update, context: CallbackContext):
             await update.message.reply_text(msg)
             return
 
-    mensagem_antiga_id = ranking_mensagens.get(chat_id)
+    mensagem_antiga_id = ranking_mensagens_top10.get(chat_id)
     if mensagem_antiga_id:
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=mensagem_antiga_id)
@@ -1019,7 +1019,7 @@ async def ranking_top10(update: Update, context: CallbackContext):
 
     if not top:
         msg = await update.message.reply_text("🏅 Nenhum usuário cadastrado no ranking.")
-        ranking_mensagens[chat_id] = msg.message_id
+        ranking_mensagens_top10[chat_id] = msg.message_id
         return
 
     linhas = ["🏅 Top 10 de pontos:"]
@@ -1039,7 +1039,7 @@ async def ranking_top10(update: Update, context: CallbackContext):
     texto = "\n".join(linhas)
     msg = await update.message.reply_text(texto)
 
-    ranking_mensagens[chat_id] = msg.message_id
+    ranking_mensagens_top10[chat_id] = msg.message_id
 
 
 async def tratar_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2009,6 +2009,38 @@ async def atualizar_ranking_recomendacoes(user_id: int, pontos: int):
     )
 
 async def ranking_lives(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    chat_id = update.effective_chat.id
+    user_id = user.id
+    username = user.username or ""
+    first_name = user.first_name or ""
+    last_name = user.last_name or ""
+
+    # 1) Presença diária
+    await processar_presenca_diaria(
+        user_id,
+        username,
+        first_name,
+        last_name,
+        context.bot
+    )
+
+    # 2) Validação de canal se for no privado
+    if update.effective_chat.type == "private":
+        invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
+        if invalido:
+            await update.message.reply_text(msg)
+            return
+
+    # 3) Remove mensagem anterior do ranking se tiver
+    mensagem_antiga_id = ranking_mensagens_lives.get(chat_id)
+    if mensagem_antiga_id:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=mensagem_antiga_id)
+        except:
+            pass
+
+    # 4) Busca o ranking
     rows = await pool.fetch(
         """
         SELECT r.user_id, r.pontos,
@@ -2021,21 +2053,25 @@ async def ranking_lives(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     if not rows:
-        await update.message.reply_text("📭 Nenhuma live aprovada ainda.")
+        msg = await update.message.reply_text("📭 Nenhuma live aprovada ainda.")
+        ranking_mensagens_lives[chat_id] = msg.message_id
         return
 
     texto = "🏆 *Ranking de Lives Aprovadas*\n\n"
-    medalhas = ["🥇", "🥈", "🥉"] + ["🏅"] * 5
+    medalhas = ["🥇", "🥈", "🥉"] + ["🏅"] * (len(rows) - 3)
 
     for i, row in enumerate(rows):
+        choice = row["display_choice"]
         nome = (
-            row["first_name"] if row["display_choice"] == "first_name" else
-            row["nickname"] if row["display_choice"] == "nickname" else
+            row["first_name"] if choice == "first_name" else
+            row["nickname"] if choice in ("nickname", "anonymous") else
             row["username"] or "Usuário"
         )
         texto += f"{medalhas[i]} *{nome}* — {row['pontos']} pts\n"
 
-    await update.message.reply_text(texto, parse_mode="Markdown")
+    msg = await update.message.reply_text(texto, parse_mode="Markdown")
+    ranking_mensagens_lives[chat_id] = msg.message_id
+
 
 async def on_startup(app):
     global ADMINS
