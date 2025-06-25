@@ -363,8 +363,8 @@ async def setup_commands(app):
         comandos_basicos = [
             BotCommand("inicio", "Volte ao começo"),
             BotCommand("meus_pontos", "Ver sua pontuação e nível"),
-            BotCommand("ranking_top10", "Top 10 de usuários por pts"),
-            BotCommand("ranking_lives", "Top 8 de usuários por pts de lives"),
+            BotCommand("rank_top10", "Top 10 de usuários por pts"),
+            BotCommand("rank_lives", "Top 8 de usuários por pts de lives"),
 
         ]
 
@@ -396,8 +396,8 @@ COMANDOS_PUBLICOS = [
     ("/meus_pontos", "Ver sua pontuação e nível"),
     ("/live", "Enviar link de live com moedas"),
     ("/historico", "Mostrar seu histórico de pontos"),
-    ("/ranking_top10", "Top 10 de usuários por pontos"),
-    ("/ranking_lives", "Top 8 de usuários por pontos de lives"),
+    ("/rank_top10", "Top 10 de usuários por pontos"),
+    ("/rank_lives", "Top 8 de usuários por pontos de lives"),
     ("/como_ganhar", "Como ganhar mais pontos"),
     ("/news", "Ver Novas Atualizações"),
 ]
