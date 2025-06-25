@@ -685,6 +685,13 @@ async def meus_pontos(update: Update, context: CallbackContext):
     first_name = user.first_name or ""
     last_name  = user.last_name  or ""
 
+    # Validação de canal se for no privado
+    if update.effective_chat.type == "private":
+        invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
+        if invalido:
+            await update.message.reply_text(msg)
+            return
+
     # Usa a função reutilizável para verificar se o usuário está no canal
     ok, msg = await verificar_canal(user_id, context.bot)
     if not ok:
