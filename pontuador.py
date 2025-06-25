@@ -2069,11 +2069,15 @@ async def ranking_lives(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for i, row in enumerate(rows):
         choice = row["display_choice"]
-        nome = (
-            row["first_name"] if choice == "first_name" else
-            row["nickname"] if choice in ("nickname", "anonymous") else
-            row["username"] or "Usuário"
-        )
+        if choice == "first_name":
+            nome = row["first_name"] or row["username"] or "Usuário"
+        elif choice in ("nickname", "anonymous"):
+            nome = row["nickname"] or row["username"] or "Usuário"
+        elif choice == "indefinido":
+            nome = "Esperando interação"
+        else:
+            nome = row["username"] or row["first_name"] or "Usuário"
+
         texto += f"{medalhas[i]} *{nome}* — {row['pontos']} pts\n"
 
     msg = await update.message.reply_text(texto, parse_mode="Markdown")
