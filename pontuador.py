@@ -60,19 +60,26 @@ if not BOT_TOKEN:
     sys.exit(1)
 
 DATABASE_URL = os.getenv('DATABASE_URL')
-ID_ADMIN = int(os.getenv('ID_ADMIN'))
 LIMIAR_PONTUADOR = 500
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 
-ADMIN_IDS = os.getenv("ADMIN_IDS", "")
-if ADMIN_IDS:
+ADMINS = set()
+
+id_admin_env = os.getenv('ID_ADMIN')
+if id_admin_env:
     try:
-        ADMINS = {int(x.strip()) for x in ADMIN_IDS.split(',') if x.strip()}
+        ADMINS.add(int(id_admin_env))
+    except ValueError:
+        logger.error("ID_ADMIN inválido, deve ser um número inteiro único")
+
+admin_ids_env = os.getenv("ADMIN_IDS", "")
+if admin_ids_env:
+    try:
+        ids = {int(x.strip()) for x in admin_ids_env.split(',') if x.strip()}
+        ADMINS.update(ids)
     except ValueError:
         logger.error("ADMIN_IDS deve conter apenas números separados por vírgula.")
-        ADMINS = set()
-else:
-    ADMINS = set()
+
 
 NIVEIS_BRINDES = {
     200: "🎁 Brinde nível 1",
@@ -174,7 +181,6 @@ async def init_db_pool():
             via_start          BOOLEAN NOT NULL DEFAULT FALSE
         );
         """)
-    ADMINS = await carregar_admins_db()
 
 
 # --- Helpers de usuário (asyncpg) ---
@@ -1713,6 +1719,12 @@ async def registrar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 1️⃣ Handler do comando /live
 async def live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
+
+    if update.effective_chat.type == "private":
+        invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
+        if invalido:
+            await update.message.reply_text(msg)
+            return ConversationHandler.END
 
     ok, msg = await verificar_canal(user_id, context.bot)
     if not ok:
