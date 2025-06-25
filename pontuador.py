@@ -65,20 +65,22 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 
 ADMINS = set()
 
-id_admin_env = os.getenv('ID_ADMIN')
+# Se quiser suportar um admin “principal”:
+id_admin_env = os.getenv("ID_ADMIN", "").strip()
 if id_admin_env:
     try:
         ADMINS.add(int(id_admin_env))
     except ValueError:
         logger.error("ID_ADMIN inválido, deve ser um número inteiro único")
 
+# Depois, a lista extra de admins:
 admin_ids_env = os.getenv("ADMIN_IDS", "")
 if admin_ids_env:
     try:
-        ids = {int(x.strip()) for x in admin_ids_env.split(',') if x.strip()}
-        ADMINS.update(ids)
+        ADMINS.update({int(x.strip()) for x in admin_ids_env.split(',') if x.strip()})
     except ValueError:
         logger.error("ADMIN_IDS deve conter apenas números separados por vírgula.")
+logger.info(f"🛡️ Admins carregados da configuração: {ADMINS}")
 
 
 NIVEIS_BRINDES = {
@@ -99,11 +101,11 @@ ranking_mensagens_top10 = {}
 ranking_mensagens_lives = {}
 
 async def init_db_pool():
-    global pool, ADMINS
+    global pool
     pool = await asyncpg.create_pool(dsn=DATABASE_URL, min_size=1, max_size=10)
+
     async with pool.acquire() as conn:
-        # Criação de tabelas se não existirem
-        await conn.execute("""
+       await conn.execute("""
        CREATE TABLE IF NOT EXISTS usuarios (
             user_id            BIGINT PRIMARY KEY,
             username           TEXT NOT NULL DEFAULT 'vazio',
@@ -2133,9 +2135,15 @@ async def ranking_lives(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def on_startup(app):
     global ADMINS
+    # 1) inicializa o pool
     await init_db_pool()
-    ADMINS = await carregar_admins_db()
-    logger.info(f"Admins carregados: {ADMINS}")
+
+    # 2) carrega do banco e mescla (sem sobrescrever o que veio do .env)
+    existing = await carregar_admins_db()
+    ADMINS.update(existing)
+    logger.info(f"🛡️ Admins após iniciar: {ADMINS}")
+    # 3) (opcional) configure seus comandos globais
+    await setup_commands(app)
 
 
 main_conv = ConversationHandler(
@@ -2190,22 +2198,17 @@ main_conv = ConversationHandler(
 
 # --- Inicialização do bot ---
 async def main():
-    global ADMINS
-
-    # 1) inicializa o pool ANTES de criar o Application
-    await init_db_pool()
-    ADMINS = await carregar_admins_db()
-
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
-        .post_init(setup_commands)
+        .post_init(on_startup)  # <— aqui, não setup_commands
         .build()
     )
+
     app.add_handler(main_conv)
     app.add_handler(live_conv)
     app.add_handler(CallbackQueryHandler(tratar_voto, pattern=r"^voto:\d+:[01]$"))
-    app.add_handler(CommandHandler("registrar", registrar_grupo, filters=filters.ChatType.GROUPS))
+    app.add_handler(CommandHandler("reg", registrar_grupo, filters=filters.ChatType.GROUPS))
 
 
     app.add_handler(
