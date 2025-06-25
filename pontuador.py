@@ -417,9 +417,15 @@ async def enviar_menu(chat_id: int, bot):
 # mantém enviar_menu(chat_id: int, bot: Bot) do jeito que você já definiu
 
 async def cmd_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # só repassa para enviar_menu
-    await enviar_menu(update.effective_chat.id, context.bot)
+    user_id = update.effective_user.id
 
+    if update.effective_chat.type == "private":
+        invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
+        if invalido:
+            await update.message.reply_text(msg)
+            return
+
+    await enviar_menu(update.effective_chat.id, context.bot)
 
 ADMIN_MENU = (
     "🔧 *Menu Admin* 🔧\n\n"
@@ -746,6 +752,13 @@ async def meus_pontos(update: Update, context: CallbackContext):
 
 async def como_ganhar(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
+
+    if update.effective_chat.type == "private":
+        invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
+        if invalido:
+            await update.message.reply_text(msg)
+            return
+
     # Usa a função reutilizável para verificar se o usuário está no canal
     ok, msg = await verificar_canal(user_id, context.bot)
     if not ok:
@@ -757,45 +770,57 @@ async def como_ganhar(update: Update, context: CallbackContext):
         f"• {pontos} pontos – {descricao}"
         for pontos, descricao in sorted(NIVEIS_BRINDES.items())
     )
+
     await update.message.reply_text(
         "🎯*Pontos Válidos a Partir de 1 de Maio de 2025 a 30 de Junho*\n\n"
         "  *Você Pode Ganhar Pontos Por*:\n"
-        "✅ Compras por ID em videos, ex: o produto do video custar $20\n"
-        "mas com cupom e moedas o valor final for R$15, entao serão 15 pontos.\n\n"
+        "✅ Compras por ID em vídeos, ex: se o produto do vídeo custa R$20\n"
+        "e com cupom e moedas o valor final for R$15, você ganha 15 pontos.\n\n"
         "✅ 05 pontos por comentar 1 vez em grupo ou interagir com o bot\n\n"
-        "✅ Ganhe pontos indicando lives toque co comando /live. \n\n"
-        "✅ 30 pontos por encontrar erros nos posts. \n\n"
-        " Funciona assim: depois do post, se achar link que não funciona,\n"
-        " link que leva a outro local, foto errada no post você ganha pontos.\n"
+        "✅ Ganhe pontos indicando lives usando o comando /live\n\n"
+        "✅ 30 pontos por encontrar erros nos posts\n\n"
+        "Funciona assim: depois do post, se achar link quebrado,\n"
+        "link errado, ou imagem trocada, você ganha pontos.\n"
         "❌ Erros de ortografia não contam.\n"
-        "❌ Também não vale se o erro foi da plataforma (ex: Mercado Livre, Shopee).\n\n"
+        "❌ Também não vale se o erro for da plataforma (ex: Shopee).\n\n"
         "💸 Como Você Pode Perder Pontos:\n"
-        "❌ Trocas por brindes, desconta os pontos.\n"
-        "❌ troca de ciclo ou fim do evento, os pontos zeram\n"
-        "❌ Comportamento spamming, banimento\n"
-        "❌ Produto devolvido (se aplicar)\n\n"
+        "❌ Trocas por brindes descontam pontos\n"
+        "❌ Troca de ciclo ou fim do evento zera os pontos\n"
+        "❌ Spamming ou banimento\n"
+        "❌ Produto devolvido (se aplicável)\n\n"
         f"{brindes_texto}\n\n",
         parse_mode="Markdown"
     )
 
 
 async def news(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+
+    if update.effective_chat.type == "private":
+        invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
+        if invalido:
+            await update.message.reply_text(msg)
+            return
+
     await update.message.reply_text(
         "🆕 *Novidades* (Junho 2025)\n\n"
         "Nova interação e ranking para lives, toque em /live e recomende um link \n\n"
-        "no qual há live que irá sair moedas, no minimo 5\n\n"
-        "você ganha pontos 10x o valor de moedas, exemplo: live com 5 moedas = 50 pontos\n\n"
-        "os links serão enviados ao grupo e outros usuarios vão votar\n\n"
-        "3 usuarios aleatorios poderao votar em positivo ou negativo 👍 ou 👎 \n"
-        "conseguindo 2 votos os pontos serão adicionados, e votando em alguma recomendação vc ganha 10 pontos\n\n"
-        "não conseguirá votar na própria recomendação, nem recomendar a mesma live duas vezes com mesmo link\n\n"
-        "os melhores colocados no ranking ganham prêmio\n"
-        "1ª lugar: R$80 em compras\n"
-        "2ª lugar: R$50 em compras\n"
-        "3ª lugar: R$30 em compras\n"
-        "4ª ao 8ª lugar: R$19 em compras.\n\n"
-        "Fora do bot, pode recomendar lives digitando o link e a quantidade de moedas\n"
-        "exemplo:\n 'Vai sair 7 moedas na live -[LINK] ...' \n\n",
+        "no qual há live que irá sair moedas, no mínimo 5\n\n"
+        "Você ganha pontos 10x o valor de moedas. Exemplo: live com 5 moedas = 50 pontos\n\n"
+        "Os links serão enviados ao grupo e outros usuários vão votar\n\n"
+        "Os Usuários poderão votar positivo ou negativo 👍 ou 👎\n"
+        "Conseguindo a maioria de votos positivos em 5 minutos, os pontos serão adicionados\n\n"
+        "Ao votar em alguma recomendação (que não seja sua), você ganha 10 pontos se a maioria estiver de acordo na mesma votação\n"
+        "❌ Não é possível votar na própria recomendação\n"
+        "❌ Nem recomendar o mesmo link duas vezes\n\n"
+        "🏆 *Prêmios do Ranking de Lives:*\n"
+        "🥇 1º lugar: R$80 em compras\n"
+        "🥈 2º lugar: R$50 em compras\n"
+        "🥉 3º lugar: R$30 em compras\n"
+        "🏅 4º ao 8º lugar: R$19 em compras\n\n"
+        "📢 Também pode recomendar *fora do bot*, digitando o link e a quantidade de moedas\n"
+        "Exemplo:\n"
+        "`Vai sair 7 moedas na live - [LINK]`\n",
         parse_mode="Markdown"
     )
 
@@ -964,6 +989,14 @@ async def atualizar_pontos(
 
 async def historico(update: Update, context: CallbackContext):
     user = update.effective_user
+    user_id = user.id
+    chat_type = update.effective_chat.type
+
+    if chat_type == "private":
+        invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
+        if invalido:
+            await update.message.reply_text(msg)
+            return
     rows = await pool.fetch(
         """
         SELECT data, pontos, motivo
@@ -972,11 +1005,13 @@ async def historico(update: Update, context: CallbackContext):
       ORDER BY data DESC
          LIMIT 50
         """,
-        user.id
+        user_id
     )
+
     if not rows:
         await update.message.reply_text("🗒️ Nenhum registro de histórico encontrado.")
         return
+
     lines = [
         f" {format_dt_sp(r['data'], '%d/%m %H:%M')}: {r['pontos']} pts - {r['motivo']}"
         for r in rows
