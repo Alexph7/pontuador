@@ -376,8 +376,8 @@ async def setup_commands(app):
 
         # 2) Comandos em chat privado (com suporte)
         comandos_privados = comandos_basicos + [
-            BotCommand("historico", "Mostrar seu histórico de pontos"),
             BotCommand("live", "Enviar Link de live com moedas"),
+            BotCommand("historico", "Mostrar seu histórico de pontos"),
             BotCommand("como_ganhar", "Como ganhar mais pontos"),
             BotCommand("news", "Ver Novas Atualizações"),
         ]
@@ -394,8 +394,8 @@ async def setup_commands(app):
 
 COMANDOS_PUBLICOS = [
     ("/meus_pontos", "Ver sua pontuação e nível"),
-    ("/historico", "Mostrar seu histórico de pontos"),
     ("/live", "Enviar link de live com moedas"),
+    ("/historico", "Mostrar seu histórico de pontos"),
     ("/ranking_top10", "Top 10 de usuários por pontos"),
     ("/ranking_lives", "Top 8 de usuários por pontos de lives"),
     ("/como_ganhar", "Como ganhar mais pontos"),
@@ -679,7 +679,11 @@ async def paginacao_via_start(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def meus_pontos(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
+    user = update.effective_user
+    user_id = user.id
+    username   = user.username or ""
+    first_name = user.first_name or ""
+    last_name  = user.last_name  or ""
 
     # Usa a função reutilizável para verificar se o usuário está no canal
     ok, msg = await verificar_canal(user_id, context.bot)
@@ -689,7 +693,13 @@ async def meus_pontos(update: Update, context: CallbackContext):
 
     try:
         # 1) Processa presença diária (vai dar 1 ponto se ainda não pontuou hoje)
-        await processar_presenca_diaria(user_id, context.bot)
+        await processar_presenca_diaria(
+            user_id,
+            username,
+            first_name or "",
+            last_name or "",
+            context.bot
+        )
 
         # 2) Busca o perfil já com os pontos atualizados
         perfil = await pool.fetchrow(
@@ -739,9 +749,9 @@ async def como_ganhar(update: Update, context: CallbackContext):
         "  *Você Pode Ganhar Pontos Por*:\n"
         "✅ Compras por ID em videos, ex: o produto do video custar $20\n"
         "mas com cupom e moedas o valor final for R$15, entao serão 15 pontos.\n\n"
-        "✅ 03 pontos por comentar 1 vez em grupo ou interagir com o bot\n\n"
-        "✅ 30 pontos por encontrar erros nos posts. \n\n"
+        "✅ 05 pontos por comentar 1 vez em grupo ou interagir com o bot\n\n"
         "✅ Ganhe pontos indicando lives toque co comando /live. \n\n"
+        "✅ 30 pontos por encontrar erros nos posts. \n\n"
         " Funciona assim: depois do post, se achar link que não funciona,\n"
         " link que leva a outro local, foto errada no post você ganha pontos.\n"
         "❌ Erros de ortografia não contam.\n"
