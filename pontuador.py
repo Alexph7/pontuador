@@ -136,7 +136,7 @@ async def init_db_pool():
        CREATE TABLE IF NOT EXISTS grupos_recomendacao (
            chat_id      BIGINT PRIMARY KEY,
            titulo       TEXT,
-           registrado_em TIMESTAMP DEFAULT NOW()
+           registrado_em TIMESTAMPTZ DEFAULT NOW()
         );
 
         -- 1) Guarda cada recomendação de lives (só o essencial)
@@ -1774,7 +1774,6 @@ async def live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     return LIVE_LINK
 
-
 # 2️⃣ Recebe e valida o link
 async def live_receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     link = update.message.text.strip()
@@ -1893,7 +1892,7 @@ async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     voter_id  = query.from_user.id
 
     #Corte por ID
-    if voter_id >= 7567101130:
+    if voter_id >= 7618258414: #22 de junho +/-
         return await query.answer(
             "❌ Desculpe, este perfil é muito novo para votar..",
             show_alert=True
@@ -1940,16 +1939,6 @@ async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if rec["user_id"] == voter_id:
         return await query.answer("❌ Você não pode votar em si mesmo.", show_alert=True)
 
-    # 4️⃣ Verifica limite de 10 votos
-    total = await pool.fetchval(
-        "SELECT COUNT(*) FROM recomendacao_votos WHERE rec_id = $1",
-        rec_id
-    )
-    if total >= 10:
-        return await query.answer(
-            "❌ Já existem 10 votos. Período de votação encerrado.",
-            show_alert=True
-        )
 
     # 5️⃣ Verifica voto duplicado
     dup = await pool.fetchval(
@@ -2050,7 +2039,6 @@ async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "e está bloqueado de votar por 3 dias.",
                 show_alert=True
             )
-
 
 
 async def atualizar_ranking_recomendacoes(user_id: int, pontos: int):
