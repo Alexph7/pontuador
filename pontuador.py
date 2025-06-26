@@ -91,6 +91,13 @@ NIVEIS_BRINDES = {
     1000: "🎁 Brinde nível 5"
 }
 
+PREMIOS_EVENTO_COMPARTILHAR = {
+    1: "🥇 R$75",
+    2: "🥈 R$50",
+    3: "🥉 R$35",
+    (4, 8): "🏅 R$20"
+}
+
 # Estados da conversa
 (ADMIN_SENHA, ESPERANDO_SUPORTE, ADD_PONTOS_POR_ID, ADD_PONTOS_QTD, ADD_PONTOS_MOTIVO, DEL_PONTOS_ID, DEL_PONTOS_QTD,
  DEL_PONTOS_MOTIVO, ADD_ADMIN_ID, REM_ADMIN_ID) = range(10)
@@ -767,33 +774,44 @@ async def como_ganhar(update: Update, context: CallbackContext):
         await update.message.reply_text(msg)
         return
 
+    premios_texto = "\n".join(
+        f"{f'{pos}º' if isinstance(pos, int) else f'{pos[0]}º - {pos[1]}º'} {premio}"
+        for pos, premio in PREMIOS_EVENTO_COMPARTILHAR.items()
+    )
+
     # Ordena os brindes por nível de pontos
     brindes_texto = "\n".join(
         f"• {pontos} pontos – {descricao}"
         for pontos, descricao in sorted(NIVEIS_BRINDES.items())
     )
 
-    await update.message.reply_text(
+    texto = (
         "🎯*Pontos Válidos a Partir de 1 de Maio de 2025 a 30 de Junho*\n\n"
-        "  *Você Pode Ganhar Pontos Por*:\n"
-        "✅ Compras por ID em vídeos, ex: se o produto do vídeo custa R$20\n"
-        "e com cupom e moedas o valor final for R$15, você ganha 15 pontos.\n\n"
-        "✅ 05 pontos por comentar 1 vez em grupo ou interagir com o bot\n\n"
-        "✅ Ganhe pontos indicando lives usando o comando /live\n\n"
+        "*Você Pode Ganhar Pontos Por:*\n"
+        "✅ 05 pontos por comentar 1 vez em grupo ou interagir com o bot\n"
+        "✅ Ganhe 10x pontos indicando lives usando o comando /live\n"
         "✅ 30 pontos por encontrar erros nos posts\n\n"
-        "Funciona assim: depois do post, se achar link quebrado,\n"
-        "link errado, ou imagem trocada, você ganha pontos.\n"
-        "❌ Erros de ortografia não contam.\n"
-        "❌ Também não vale se o erro for da plataforma (ex: Shopee).\n\n"
-        "💸 Como Você Pode Perder Pontos:\n"
-        "❌ Trocas por brindes descontam pontos\n"
+        "_Funciona assim: depois do post, se achar link quebrado,\n"
+        "link errado, ou imagem trocada, você ganha pontos._\n"
+        "❌ *Erros de ortografia não contam.*\n"
+        "❌ *Não vale se o erro for da plataforma (ex: Shopee)*\n\n"
+        "💸 *Como Você Pode Perder Pontos:*\n"
+        "❌ Trocas por brindes reinicia a pontuação da categoria\n"
         "❌ Troca de ciclo ou fim do evento zera os pontos\n"
         "❌ Spamming ou banimento\n"
         "❌ Produto devolvido (se aplicável)\n\n"
-        f"{brindes_texto}\n\n",
-        parse_mode="Markdown"
+        "🎁 *Quadro de Brindes Do Evento Passado:*\n"
+        f"{brindes_texto}\n\n"
+        "🎁 *Prêmios - Compartilhar Lives:*\n"
+        f"{premios_texto}\n\n"
+        "❗ *Regras:*\n"
+        "• Compartilhe lives válidas nos grupos\n"
+        "• Cada live compartilhada aprovada conta\n"
+        "• Evite spam ou recomendações falsas\n\n"
+        "🍀 Boa sorte!"
     )
 
+    await update.message.reply_text(texto, parse_mode="Markdown")
 
 async def news(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
@@ -807,22 +825,22 @@ async def news(update: Update, context: CallbackContext):
     await update.message.reply_text(
         "🆕 *Novidades* (Junho 2025)\n\n"
         "Nova interação e ranking para lives, toque em /live e recomende um link \n\n"
-        "no qual há live que irá sair moedas, no mínimo 5\n\n"
-        "Você ganha pontos 10x o valor de moedas. Exemplo: live com 5 moedas = 50 pontos\n\n"
-        "Os links serão enviados ao grupo e outros usuários vão votar\n\n"
+        "no qual há live que irá sair moedas, no mínimo 5\n"
+        "Você ganha pontos 10x o valor de moedas. Exemplo: live com 5 moedas = 50 pontos\n"
+        "Os links serão enviados ao grupo e outros usuários vão votar\n"
         "Os Usuários poderão votar positivo ou negativo 👍 ou 👎\n"
-        "Conseguindo a maioria de votos positivos em 5 minutos, os pontos serão adicionados\n\n"
+        "Conseguindo a maioria de votos positivos em 5 minutos, os pontos serão adicionados\n"
         "Ao votar em alguma recomendação (que não seja sua), você ganha 10 pontos se a maioria estiver de acordo na mesma votação\n"
         "❌ Não é possível votar na própria recomendação\n"
         "❌ Nem recomendar o mesmo link duas vezes\n\n"
         "🏆 *Prêmios do Ranking de Lives:*\n"
-        "🥇 1º lugar: R$80 em compras\n"
+        "🥇 1º lugar: R$75 em compras\n"
         "🥈 2º lugar: R$50 em compras\n"
         "🥉 3º lugar: R$30 em compras\n"
-        "🏅 4º ao 8º lugar: R$19 em compras\n\n"
+        "🏅 4º ao 8º lugar: R$20 em compras\n\n"
         "📢 Também pode recomendar *fora do bot*, digitando o link e a quantidade de moedas\n"
         "Exemplo:\n"
-        "`Vai sair 7 moedas na live - [LINK]`\n",
+        "Vai sair 7 moedas na live - [LINK]\n",
         parse_mode="Markdown"
     )
 
