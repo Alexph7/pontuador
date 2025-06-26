@@ -190,7 +190,7 @@ async def init_db_pool():
             via_start          BOOLEAN NOT NULL DEFAULT FALSE
         );
         """)
-
+#   await migrar_schema_usuarios()
 
 # --- Helpers de usuário (asyncpg) ---
 PAGE_SIZE = 16
@@ -409,12 +409,12 @@ async def setup_commands(app):
 
 COMANDOS_PUBLICOS = [
     ("/meus_pontos", "Ver sua pontuação e nível"),
-    ("/live", "Enviar link de live com moedas"),
-    ("/historico", "Mostrar seu histórico de pontos"),
-    ("/rank_top10", "Top 10 de usuários por pontos"),
-    ("/rank_lives", "Top 8 de usuários por pontos de lives"),
+    ("/live",        "Enviar link de live com moedas"),
+    ("/historico",   "Mostrar seu histórico de pontos"),
+    ("/rank_top10",  "Top 10 de usuários por pontos"),
+    ("/rank_lives",  "Top 8 de usuários por pontos de lives"),
     ("/como_ganhar", "Como ganhar mais pontos"),
-    ("/news", "Ver Novas Atualizações"),
+    ("/news",        "Ver Novas Atualizações"),
 ]
 
 async def enviar_menu(chat_id: int, bot):
@@ -435,6 +435,22 @@ async def cmd_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     await enviar_menu(update.effective_chat.id, context.bot)
+
+# async def migrar_schema_usuarios():
+#     async with pool.acquire() as conn:
+#         # Remove colunas antigas se existirem
+#         await conn.execute("""
+#             ALTER TABLE usuarios
+#             DROP COLUMN IF EXISTS is_pontuador,
+#             DROP COLUMN IF EXISTS _interacao;
+#         """)
+#
+#         # Adiciona coluna ultima_interacao se não existir
+#         await conn.execute("""
+#             ALTER TABLE usuarios
+#             ADD COLUMN IF NOT EXISTS ultima_interacao DATE;
+#         """)
+
 
 ADMIN_MENU = (
     "🔧 *Menu Admin* 🔧\n\n"
