@@ -105,14 +105,13 @@ PREMIOS_EVENTO_COMPARTILHAR = {
 TEMPO_LIMITE_BUSCA = 10  # Tempo máximo (em segundos) para consulta
 
 ranking_mensagens_top10 = {}
-ranking_mensagens_lives = {}
 
 async def init_db_pool():
     global pool
     pool = await asyncpg.create_pool(dsn=DATABASE_URL, min_size=1, max_size=10)
 
     async with pool.acquire() as conn:
-       await conn.execute("""
+        await conn.execute("""
        CREATE TABLE IF NOT EXISTS usuarios (
             user_id            BIGINT PRIMARY KEY,
             username           TEXT NOT NULL DEFAULT 'vazio',
@@ -139,51 +138,7 @@ async def init_db_pool():
        CREATE TABLE IF NOT EXISTS admins (
             user_id BIGINT PRIMARY KEY
         );
-
-       CREATE TABLE IF NOT EXISTS grupos_recomendacao (
-           chat_id      BIGINT PRIMARY KEY,
-           titulo       TEXT,
-           registrado_em TIMESTAMPTZ DEFAULT NOW()
-        );
-
-       CREATE TABLE IF NOT EXISTS recomendacao_mensagens (
-           rec_id      INTEGER   NOT NULL REFERENCES recomendacoes(id),
-           chat_id     BIGINT    NOT NULL,
-           message_id  INTEGER   NOT NULL,
-           PRIMARY KEY (rec_id, chat_id)
-        );
-
-        -- 1) Guarda cada recomendação de lives (só o essencial)
-       CREATE TABLE IF NOT EXISTS recomendacoes (
-            id              SERIAL PRIMARY KEY,
-            user_id         BIGINT      NOT NULL REFERENCES usuarios(user_id),
-            nome_exibicao   TEXT        NOT NULL,
-            link            TEXT        NOT NULL,
-            moedas          SMALLINT    NOT NULL CHECK (moedas >= 5),
-            criada_em       TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-        
-        -- 2) Armazena os votos
-       CREATE TABLE IF NOT EXISTS recomendacao_votos (
-            rec_id      INTEGER     NOT NULL REFERENCES recomendacoes(id) ON DELETE CASCADE,
-            voter_id    BIGINT      NOT NULL,                     -- quem votou
-            voto        BOOLEAN     NOT NULL,                     -- TRUE = positivo, FALSE = negativo
-            votado_em   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            PRIMARY KEY (rec_id, voter_id)
-        );
-
-       --- SQL para penalizações (execute uma vez no seu DB) ---
-       CREATE TABLE IF NOT EXISTS penalizacoes (
-         user_id     BIGINT PRIMARY KEY REFERENCES usuarios(user_id),
-         strikes     INTEGER NOT NULL DEFAULT 0,
-         bloqueado_ate TIMESTAMPTZ
-        );
-        
-       CREATE TABLE IF NOT EXISTS ranking_recomendacoes (
-            user_id BIGINT PRIMARY KEY,
-            pontos  INTEGER NOT NULL DEFAULT 0
-        );
-
+                    
        CREATE TABLE IF NOT EXISTS usuario_history (
             id           SERIAL    PRIMARY KEY,
             user_id      BIGINT    NOT NULL REFERENCES usuarios(user_id) ON DELETE CASCADE,
@@ -197,7 +152,7 @@ async def init_db_pool():
             via_start          BOOLEAN NOT NULL DEFAULT FALSE
         );
         """)
-#   await migrar_schema_usuarios()
+
 
 # --- Helpers de usuário (asyncpg) ---
 PAGE_SIZE = 16
@@ -319,11 +274,11 @@ async def adicionar_usuario_db(
 
 
 async def obter_ou_criar_usuario_db(
-    user_id: int,
-    username: str    = "vazio",
-    first_name: str  = "vazio",
-    last_name: str   = "vazio",
-    via_start: bool  = False
+        user_id: int,
+        username: str = "vazio",
+        first_name: str = "vazio",
+        last_name: str = "vazio",
+        via_start: bool = False
 ):
     perfil = await pool.fetchrow("SELECT * FROM usuarios WHERE user_id = $1", user_id)
 
@@ -386,7 +341,6 @@ async def setup_commands(app):
             BotCommand("inicio", "Volte ao começo"),
             BotCommand("meus_pontos", "Ver sua pontuação e nível"),
             BotCommand("rank_top10", "Top 10 de usuários por pts"),
-            BotCommand("rank_lives", "Top 8 de usuários por pts de lives"),
 
         ]
 
@@ -398,7 +352,6 @@ async def setup_commands(app):
 
         # 2) Comandos em chat privado (com suporte)
         comandos_privados = comandos_basicos + [
-            BotCommand("live", "Enviar Link de live com moedas"),
             BotCommand("historico", "Mostrar seu histórico de pontos"),
             BotCommand("como_ganhar", "Como ganhar mais pontos"),
             BotCommand("news", "Ver Novas Atualizações"),
@@ -416,12 +369,10 @@ async def setup_commands(app):
 
 COMANDOS_PUBLICOS = [
     ("/meus_pontos", "Ver sua pontuação e nível"),
-    ("/live",        "Enviar link de live com moedas"),
-    ("/historico",   "Mostrar seu histórico de pontos"),
-    ("/rank_top10",  "Top 10 de usuários por pontos"),
-    ("/rank_lives",  "Top 8 de usuários por pontos de lives"),
+    ("/historico", "Mostrar seu histórico de pontos"),
+    ("/rank_top10", "Top 10 de usuários por pontos"),
     ("/como_ganhar", "Como ganhar mais pontos"),
-    ("/news",        "Ver Novas Atualizações"),
+    ("/news", "Ver Novas Atualizações"),
 ]
 
 async def enviar_menu(chat_id: int, bot):
@@ -443,22 +394,6 @@ async def cmd_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await enviar_menu(update.effective_chat.id, context.bot)
 
-# async def migrar_schema_usuarios():
-#     async with pool.acquire() as conn:
-#         # Remove colunas antigas se existirem
-#         await conn.execute("""
-#             ALTER TABLE usuarios
-#             DROP COLUMN IF EXISTS is_pontuador,
-#             DROP COLUMN IF EXISTS _interacao;
-#         """)
-#
-#         # Adiciona coluna ultima_interacao se não existir
-#         await conn.execute("""
-#             ALTER TABLE usuarios
-#             ADD COLUMN IF NOT EXISTS ultima_interacao DATE;
-#         """)
-
-
 ADMIN_MENU = (
     "🔧 *Menu Admin* 🔧\n\n"
     "/add - atribuir pontos a um usuário\n"
@@ -468,7 +403,6 @@ ADMIN_MENU = (
     "/listar_usuarios – lista de usuarios cadastrados\n"
     "/estatisticas – quantidade total de usuarios cadastrados\n"
     "/listar_via_start – usuario que se cadastraram via start\n"
-    "/registrar – Registrar grupo onde as mensagens de links de lives serao enviadas\n"
 )
 
 
@@ -657,6 +591,7 @@ async def perfil_invalido_ou_nao_inscrito(user_id: int, bot: Bot) -> tuple[bool,
 
 USUARIOS_POR_PAGINA = 20
 
+
 async def listar_via_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     page = int(context.args[0]) if context.args and context.args[0].isdigit() else 1
     offset = (page - 1) * USUARIOS_POR_PAGINA
@@ -725,9 +660,9 @@ async def paginacao_via_start(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def meus_pontos(update: Update, context: CallbackContext):
     user = update.effective_user
     user_id = user.id
-    username   = user.username or ""
+    username = user.username or ""
     first_name = user.first_name or ""
-    last_name  = user.last_name  or ""
+    last_name = user.last_name or ""
 
     # Validação de canal se for no privado
     if update.effective_chat.type == "private":
@@ -810,31 +745,12 @@ async def como_ganhar(update: Update, context: CallbackContext):
 
     texto = (
         "🎯*Pontos Válidos a Partir de 1 de Maio de 2025 a 30 de Junho*\n\n"
-        "*Você Pode Ganhar Pontos Por:*\n"
-        "✅ 05 pontos por comentar 1 vez em grupo ou interagir com o bot\n"
-        "✅ Ganhe 10x pontos indicando lives usando o comando /live\n"
-        "✅ 30 pontos por encontrar erros nos posts\n\n"
-        "_Funciona assim: depois do post, se achar link quebrado,\n"
-        "link errado, ou imagem trocada, você ganha pontos._\n"
-        "❌ *Erros de ortografia não contam.*\n"
-        "❌ *Não vale se o erro for da plataforma (ex: Shopee)*\n\n"
-        "💸 *Como Você Pode Perder Pontos:*\n"
-        "❌ Trocas por brindes reinicia a pontuação da categoria\n"
-        "❌ Troca de ciclo ou fim do evento zera os pontos\n"
-        "❌ Spamming ou banimento\n"
-        "❌ Produto devolvido (se aplicável)\n\n"
-        "🎁 *Quadro de Brindes Do Evento Passado:*\n"
-        f"{brindes_texto}\n\n"
-        "🎁 *Prêmios - Compartilhar Lives:*\n"
-        f"{premios_texto}\n\n"
-        "❗ *Regras:*\n"
-        "• Compartilhe lives válidas nos grupos\n"
-        "• Cada live compartilhada aprovada conta\n"
-        "• Evite spam ou recomendações falsas\n\n"
-        "🍀 Boa sorte!"
+        "Interações terminadas, em breve novas atualizações"
+
     )
 
     await update.message.reply_text(texto, parse_mode="Markdown")
+
 
 async def news(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
@@ -846,27 +762,10 @@ async def news(update: Update, context: CallbackContext):
             return
 
     await update.message.reply_text(
-        "🆕 *Novidades* (Junho 2025)\n\n"
-        "Nova interação e ranking para lives, toque em /live e recomende um link \n\n"
-        "no qual há live que irá sair moedas, no mínimo 5\n"
-        "Você ganha pontos 10x o valor de moedas. Exemplo: live com 5 moedas = 50 pontos\n"
-        "Os links serão enviados ao grupo e outros usuários vão votar\n"
-        "Os Usuários poderão votar positivo ou negativo 👍 ou 👎\n"
-        "Conseguindo a maioria de votos positivos em 5 minutos, os pontos serão adicionados\n"
-        "Ao votar em alguma recomendação (que não seja sua), você ganha 10 pontos se a maioria estiver de acordo na mesma votação\n"
-        "❌ Não é possível votar na própria recomendação\n"
-        "❌ Nem recomendar o mesmo link duas vezes\n\n"
-        "🏆 *Prêmios do Ranking de Lives:*\n"
-        "🥇 1º lugar: R$75 em compras\n"
-        "🥈 2º lugar: R$50 em compras\n"
-        "🥉 3º lugar: R$30 em compras\n"
-        "🏅 4º ao 8º lugar: R$20 em compras\n\n"
-        "📢 Também pode recomendar *fora do bot*, digitando o link e a quantidade de moedas\n"
-        "Exemplo:\n"
-        "Vai sair 7 moedas na live - [LINK]\n",
+        "🆕 *Novidades* ( -- 2025)\n\n"
+        "Aparando Ultimo Evento, Novidades em Breve",
         parse_mode="Markdown"
     )
-
 
 async def add_pontos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1064,11 +963,11 @@ async def historico(update: Update, context: CallbackContext):
 
 async def ranking_top10(update: Update, context: CallbackContext):
     user = update.effective_user
-    user_id    = user.id
-    username   = user.username   or ""
+    user_id = user.id
+    username = user.username or ""
     first_name = user.first_name or ""
-    last_name  = user.last_name  or ""
-    chat_id    = update.effective_chat.id
+    last_name = user.last_name or ""
+    chat_id = update.effective_chat.id
 
     # 1) Presença diária unificada — agora com 5 args:
     await processar_presenca_diaria(
@@ -1115,7 +1014,16 @@ async def ranking_top10(update: Update, context: CallbackContext):
 
     linhas = ["🏅 Top 10 de pontos:"]
     for i, u in enumerate(top):
-        display = obter_nome_exibicao(u)
+        choice = u["display_choice"]
+        if choice == "first_name":
+            display = u["first_name"] or u["username"] or "Usuário"
+        elif choice in ("nickname", "anonymous"):
+            display = u["nickname"] or u["username"] or "Usuário"
+        elif choice == "indefinido":
+            display = "Esperando interação"
+        else:
+            display = u["username"] or u["first_name"] or "Usuário"
+
         linhas.append(f"{i + 1}. {display} - {u['pontos']} pts")
 
     texto = "\n".join(linhas)
@@ -1137,12 +1045,13 @@ async def tratar_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot=context.bot
     )
 
+
 async def processar_presenca_diaria(
-    user_id: int,
-    username: str,
-    first_name: str,
-    last_name: str,
-    bot: Bot
+        user_id: int,
+        username: str,
+        first_name: str,
+        last_name: str,
+        bot: Bot
 ) -> int | None:
     perfil = await obter_ou_criar_usuario_db(
         user_id=user_id,
@@ -1759,487 +1668,6 @@ async def estatisticas(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Erro ao gerar estatísticas: {e}")
         await update.message.reply_text("❌ Não foi possível gerar as estatísticas no momento")
 
-
-LIVE_LINK, LIVE_MOEDAS = range(2)
-
-async def registrar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-
-    if user_id not in ADMINS:
-        return
-
-    # continua usando chat como antes
-    chat = update.effective_chat
-
-    if chat.type in ("group", "supergroup"):
-        await pool.execute(
-            """
-            INSERT INTO grupos_recomendacao (chat_id, titulo)
-            VALUES ($1, $2)
-            ON CONFLICT (chat_id) DO NOTHING
-            """,
-            chat.id, chat.title or ""
-        )
-        await update.message.reply_text("✅ Grupo registrado para receber recomendações!")
-    else:
-        await update.message.reply_text("❌ Este comando só pode ser usado em grupos.")
-
-
-def obter_nome_exibicao(perfil: dict) -> str:
-    dc = perfil.get("display_choice", "indefinido")
-    first = perfil.get("first_name", "")
-    user = perfil.get("username", "")
-    nick = perfil.get("nickname", "")
-
-    # Ignora placeholders
-    if first.lower() == "vazio":
-        first = ""
-    if user.lower() == "vazio":
-        user = ""
-    if nick.lower() in ("sem nick", "vazio"):
-        nick = ""
-
-    if dc == "first_name":
-        return first or user or "Usuário"
-    elif dc in ("nickname", "anonymous"):
-        return nick or user or "Usuário"
-    elif dc == "indefinido":
-        return "Esperando interação"
-    else:
-        return user or first or "Usuário"
-
-
-# 1️⃣ Handler do comando /live
-async def live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = update.effective_user.id
-
-    if update.effective_chat.type == "private":
-        invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
-        if invalido:
-            await update.message.reply_text(msg)
-            return ConversationHandler.END
-
-    ok, msg = await verificar_canal(user_id, context.bot)
-    if not ok:
-        await update.message.reply_text(msg)
-        return ConversationHandler.END  # ou return -1, depende do seu fluxo
-
-    await update.message.reply_text(
-        "📎 Por favor, envie o link da live.\n"
-        "Deve começar com `br.shp.`, É melhor sugerir lives que estão prestes a liberar moedas, para dar tempo."
-    )
-    return LIVE_LINK
-
-# 2️⃣ Recebe e valida o link
-async def live_receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    link = update.message.text.strip()
-    pattern = re.compile(r'^(?:https?://)?br\.shp\.ee(?:/.*)?$')
-
-    if not pattern.match(link) or len(link) > 28:
-        await update.message.reply_text(
-            "❌ Link inválido. Ele deve começar com `br.shp.ee` ou nao é válido. \nTente novamente:"
-        )
-        return LIVE_LINK
-
-    user_id = update.effective_user.id
-    existe = await pool.fetchval(
-        "SELECT 1 FROM recomendacoes WHERE user_id = $1 AND link = $2",
-        user_id, link
-    )
-    if existe:
-        await update.message.reply_text(
-            "⚠️ Você já recomendou esse link antes. Envie outro link:"
-        )
-        return LIVE_LINK
-
-    context.user_data["link"] = link
-    await update.message.reply_text("💰 Agora, quantas moedas essa live vale? (mínimo 5)")
-    return LIVE_MOEDAS
-
-# 3️⃣ Recebe e valida as moedas
-async def live_receive_moedas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text.strip()
-    if not text.isdigit() or int(text) < 5:
-        await update.message.reply_text("❌ Valor inválido. Envie inteiro ≥ 5:")
-        return LIVE_MOEDAS
-
-    moedas = int(text)
-    user = update.effective_user
-    link = context.user_data["link"]
-
-    perfil = await pool.fetchrow(
-        "SELECT display_choice, first_name, username, nickname FROM usuarios WHERE user_id=$1",
-        user.id
-    )
-    dc = perfil["display_choice"]
-    nome = obter_nome_exibicao(perfil)  # <-- faz o tratamento correto
-
-    rec = await pool.fetchrow(
-        "INSERT INTO recomendacoes (user_id, nome_exibicao, link, moedas) "
-        "VALUES ($1,$2,$3,$4) RETURNING id",
-        user.id, nome, link, moedas
-    )
-    rec_id = rec["id"]
-
-    texto = (
-        f"📣 {nome} recomendou uma live com {moedas} moedas!\n"
-        f"🔗 {link}\n\n"
-        "Esta recomendação é verdadeira? Vote e ganhe pontos também!"
-    )
-    teclado = InlineKeyboardMarkup([[
-        InlineKeyboardButton("👍", callback_data=f"voto:{rec_id}:1"),
-        InlineKeyboardButton("👎", callback_data=f"voto:{rec_id}:0"),
-    ]])
-
-    grupos = await pool.fetch("SELECT chat_id FROM grupos_recomendacao")
-    for row in grupos:
-        try:
-            msg = await context.bot.send_message(
-                chat_id=row["chat_id"],
-                text=texto,
-                reply_markup=teclado,
-            )
-
-            await pool.execute(
-                "INSERT INTO recomendacao_mensagens (rec_id, chat_id, message_id) VALUES ($1, $2, $3)",
-                rec_id, msg.chat_id, msg.message_id
-            )
-
-            # agenda exclusão da recomendação após 20 minutos (1200s)
-            async def apagar_recomendacao_later(chat_id, message_id):
-                await asyncio.sleep(1200)
-                try:
-                    await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-                except:
-                    pass
-
-            context.application.create_task(
-                apagar_recomendacao_later(msg.chat_id, msg.message_id)
-            )
-        except:
-            pass
-
-    await update.message.reply_text("✅ Recomendações postadas nos grupos!")
-    return ConversationHandler.END
-
-# 4️⃣ Registro no ApplicationBuilder
-live_conv = ConversationHandler(
-    entry_points=[ CommandHandler('live', live, filters=filters.ChatType.PRIVATE) ],
-    states={
-        LIVE_LINK:   [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, live_receive_link),
-            # você já tem aqui o cancelar via regex, mas não é estritamente necessário
-            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancel),
-        ],
-        LIVE_MOEDAS: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, live_receive_moedas),
-            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancel),
-        ],
-    },
-    fallbacks=[CommandHandler("cancelar", cancel)],
-    allow_reentry=True,
-)
-
-async def detectar_recomendacao_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
-        print("Ignorando update sem texto")
-        return
-
-    texto = update.message.text.strip()
-    print(f"[DEBUG] Mensagem recebida no grupo: {texto!r}")
-
-    # Regex para link e moedas (ajuste conforme necessidade)
-    import re
-
-    # Exemplo: link que começa com opcional https:// e br.shp.ee seguido de 7-10 caracteres (ajuste se quiser)
-    pattern_link = r"(https?://)?br\.shp\.ee/[a-zA-Z0-9]{7,10}"
-    pattern_moedas = r"\b(\d{1,3})\b"
-
-    link_match = re.search(pattern_link, texto)
-    moedas_match = re.findall(pattern_moedas, texto)
-
-    if not link_match:
-        print("Link não encontrado na mensagem.")
-        return
-    else:
-        link = link_match.group(0)
-        print(f"Link detectado: {link}")
-
-    # Pega a última ocorrência de número >= 5 para moedas
-    moedas = None
-    for m in reversed(moedas_match):
-        if int(m) >= 5:
-            moedas = int(m)
-            break
-
-    if moedas is None:
-        print("Quantidade de moedas válida não encontrada.")
-        return
-    else:
-        print(f"Moedas detectadas: {moedas}")
-
-    # A partir daqui, faça a inserção no banco e demais ações que já tem no seu código.
-    # Só como exemplo:
-    user = update.effective_user
-    perfil = await pool.fetchrow(
-        "SELECT display_choice, first_name, username, nickname FROM usuarios WHERE user_id=$1",
-        user.id
-    )
-    nome = obter_nome_exibicao(perfil)
-
-    rec = await pool.fetchrow(
-        "INSERT INTO recomendacoes (user_id, nome_exibicao, link, moedas) "
-        "VALUES ($1,$2,$3,$4) RETURNING id",
-        user.id, nome, link, moedas
-    )
-    rec_id = rec["id"]
-
-    print(f"Recomendação inserida com id {rec_id}")
-
-    # (Aqui você pode mandar mensagem, criar teclado, etc)
-
-
-MIN_PONTOS_PARA_VOTAR = 16
-
-async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query     = update.callback_query
-    voter_id  = query.from_user.id
-
-    #Corte por ID
-    if voter_id >= 7618258414: #22 de junho +/-
-        return await query.answer(
-            "❌ Desculpe, este perfil é muito novo para votar..",
-            show_alert=True
-        )
-
-    # ✅ Verifica se tem pontos suficientes
-    pontos_atuais = await pool.fetchval(
-        "SELECT pontos FROM usuarios WHERE user_id = $1",
-        voter_id
-    ) or 0
-
-    if pontos_atuais < MIN_PONTOS_PARA_VOTAR:
-        faltam = MIN_PONTOS_PARA_VOTAR - pontos_atuais
-        return await query.answer(
-            f"🔒 Você precisa de pelo menos {MIN_PONTOS_PARA_VOTAR} pontos para votar.\n"
-            f"Faltam {faltam} ponto(s). Interaja com o bot para ganhar mais pontos. /como_ganhar",
-            show_alert=True
-        )
-
-    # 1️⃣ Extração de rec_id e voto
-    _, rec_id_str, voto_str = query.data.split(":")
-    rec_id, voto = int(rec_id_str), bool(int(voto_str))
-
-    # 2️⃣ Verifica se o usuário está bloqueado por penalização
-    pen = await pool.fetchrow(
-        "SELECT strikes, bloqueado_ate FROM penalizacoes WHERE user_id = $1",
-        voter_id
-    )
-    agora = hoje_hora_sp()
-    if pen and pen["bloqueado_ate"] and pen["bloqueado_ate"] > agora:
-        return await query.answer(
-            f"⛔ Você está impedido de votar até "
-            f"{pen['bloqueado_ate'].strftime('%d/%m/%Y %H:%M')}.",
-            show_alert=True
-        )
-
-    # 3️⃣ Busca recomendação
-    rec = await pool.fetchrow(
-        "SELECT user_id, moedas FROM recomendacoes WHERE id = $1",
-        rec_id
-    )
-    if not rec:
-        return await query.answer("❌ Recomendação não encontrada.", show_alert=True)
-    if rec["user_id"] == voter_id:
-        return await query.answer("❌ Você não pode votar em si mesmo.", show_alert=True)
-
-
-    # 5️⃣ Verifica voto duplicado
-    dup = await pool.fetchval(
-        "SELECT 1 FROM recomendacao_votos WHERE rec_id = $1 AND voter_id = $2",
-        rec_id, voter_id
-    )
-    if dup:
-        return await query.answer("❌ Você já votou aqui.", show_alert=True)
-
-    # 6️⃣ Grava o voto
-    await pool.execute(
-        "INSERT INTO recomendacao_votos (rec_id, voter_id, voto) VALUES ($1, $2, $3)",
-        rec_id, voter_id, voto
-    )
-
-    # 7️⃣ Popup de conscientização
-    texto_alert = (
-        "Atenção, veja a live antes de votar. só ganha pontos o voto da maioria. 3 votos errados pode impedir de votar"
-    )
-    await query.answer(texto_alert, show_alert=True)
-
-    # 8️⃣ Agenda revelação uma única vez
-    flag = f"reveal_scheduled:{rec_id}"
-    if not context.bot_data.get(flag):
-        context.bot_data[flag] = True
-
-        async def revelar():
-            await asyncio.sleep(60)  # tempo para revelar os votos
-
-            votos = await pool.fetch(
-                "SELECT voto FROM recomendacao_votos WHERE rec_id = $1",
-                rec_id
-            )
-            positivos = sum(1 for v in votos if v["voto"])
-            negativos = len(votos) - positivos
-
-            teclado = InlineKeyboardMarkup([[
-                InlineKeyboardButton(f"👍 {positivos}", callback_data="noop"),
-                InlineKeyboardButton(f"👎 {negativos}", callback_data="noop"),
-            ]])
-
-            mensagens = await pool.fetch(
-                "SELECT chat_id, message_id FROM recomendacao_mensagens WHERE rec_id = $1",
-                rec_id
-            )
-
-            for row in mensagens:
-                try:
-                    await context.bot.edit_message_reply_markup(
-                        chat_id=row["chat_id"],
-                        message_id=row["message_id"],
-                        reply_markup=teclado
-                    )
-                except:
-                    pass
-
-        context.application.create_task(revelar())
-
-    # 9️⃣ Conta votos para decidir empate, pontos e penalização
-    votos = await pool.fetch(
-        "SELECT voto FROM recomendacao_votos WHERE rec_id = $1", rec_id
-    )
-    positivos = sum(1 for v in votos if v["voto"])
-    negativos = len(votos) - positivos
-
-    # 9.1️⃣ Empate: nem pontos, nem penalização
-    if len(votos) >= 3 and positivos == negativos:
-        return await query.answer(
-            "⚖️ Houve empate na votação: nenhum ponto é dado e ninguém é penalizado.",
-            show_alert=True
-        )
-
-    # 9.2️⃣ Maioria positiva: concede pontos
-    if len(votos) >= 3 and positivos > negativos:
-        pontos = rec["moedas"] * 10
-        await atualizar_pontos(rec["user_id"], pontos, "Live aprovada")
-        # aqui você pode inserir também a lógica de atualizar ranking separado e notificar o autor
-        return
-
-    # 9.3️⃣ Maioria negativa: penaliza quem votou contra a maioria
-    if len(votos) >= 3 and negativos > positivos:
-        # incrementa strike
-        row = await pool.fetchrow(
-            """
-            INSERT INTO penalizacoes (user_id, strikes)
-            VALUES ($1, 1)
-            ON CONFLICT (user_id)
-            DO UPDATE SET strikes = penalizacoes.strikes + 1
-            RETURNING strikes
-            """,
-            voter_id
-        )
-        strikes = row["strikes"]
-        # se atingir 3 strikes, bloqueia por 3 dias
-        if strikes >= 3:
-            bloqueado_ate = agora + timedelta(days=3)
-            await pool.execute(
-                "UPDATE penalizacoes SET bloqueado_ate = $1 WHERE user_id = $2",
-                bloqueado_ate, voter_id
-            )
-            return await query.answer(
-                "⛔ Você recebeu 3 strikes por votar contra a maioria "
-                "e está bloqueado de votar por 3 dias.",
-                show_alert=True
-            )
-
-
-async def atualizar_ranking_recomendacoes(user_id: int, pontos: int):
-    await pool.execute(
-        """
-        INSERT INTO ranking_recomendacoes (user_id, pontos)
-        VALUES ($1, $2)
-        ON CONFLICT (user_id)
-        DO UPDATE SET pontos = ranking_recomendacoes.pontos + EXCLUDED.pontos
-        """,
-        user_id, pontos
-    )
-
-async def ranking_lives(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    chat_id = update.effective_chat.id
-    user_id = user.id
-    username = user.username or ""
-    first_name = user.first_name or ""
-    last_name = user.last_name or ""
-
-    # 1) Presença diária
-    await processar_presenca_diaria(
-        user_id,
-        username,
-        first_name,
-        last_name,
-        context.bot
-    )
-
-    # 2) Validação de canal se for no privado
-    if update.effective_chat.type == "private":
-        invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
-        if invalido:
-            await update.message.reply_text(msg)
-            return
-
-    # 3) Remove mensagem anterior do ranking se tiver
-    mensagem_antiga_id = ranking_mensagens_lives.get(chat_id)
-    if mensagem_antiga_id:
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=mensagem_antiga_id)
-        except:
-            pass
-
-    # 4) Busca o ranking
-    rows = await pool.fetch(
-        """
-        SELECT r.user_id, r.pontos,
-               u.first_name, u.username, u.nickname, u.display_choice
-        FROM ranking_recomendacoes r
-        JOIN usuarios u ON u.user_id = r.user_id
-        ORDER BY r.pontos DESC
-        LIMIT 8
-        """
-    )
-
-    if not rows:
-        msg = await update.message.reply_text("📭 Nenhuma live aprovada ainda.")
-        ranking_mensagens_lives[chat_id] = msg.message_id
-        return
-
-    texto = "🏆 *Ranking de Lives Aprovadas*\n\n"
-    medalhas = ["🥇", "🥈", "🥉"] + ["🏅"] * (len(rows) - 3)
-
-    for i, row in enumerate(rows):
-        choice = row["display_choice"]
-        if choice == "first_name":
-            nome = row["first_name"] or row["username"] or "Usuário"
-        elif choice in ("nickname", "anonymous"):
-            nome = row["nickname"] or row["username"] or "Usuário"
-        elif choice == "indefinido":
-            nome = "Esperando interação"
-        else:
-            nome = row["username"] or row["first_name"] or "Usuário"
-
-        texto += f"{medalhas[i]} *{nome}* — {row['pontos']} pts\n"
-
-    msg = await update.message.reply_text(texto, parse_mode="Markdown")
-    ranking_mensagens_lives[chat_id] = msg.message_id
-
-
 async def on_startup(app):
     global ADMINS
     # 1) inicializa o pool
@@ -2313,10 +1741,6 @@ async def main():
     )
 
     app.add_handler(main_conv)
-    app.add_handler(live_conv)
-    app.add_handler(CallbackQueryHandler(tratar_voto, pattern=r"^voto:\d+:[01]$"))
-    app.add_handler(CommandHandler("reg", registrar_grupo, filters=filters.ChatType.GROUPS))
-    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, detectar_recomendacao_grupo))
 
     app.add_handler(
         ConversationHandler(
@@ -2343,7 +1767,6 @@ async def main():
     app.add_handler(CallbackQueryHandler(paginacao_via_start, pattern=r"^via_start:\d+$"))
 
     app.add_handler(CommandHandler('rank_top10', ranking_top10))
-    app.add_handler(CommandHandler("rank_lives", ranking_lives))
     app.add_handler(CommandHandler("historico_user", historico_usuario, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("listar_usuarios", listar_usuarios, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("listar_via_start", listar_via_start, filters=filters.ChatType.PRIVATE))
