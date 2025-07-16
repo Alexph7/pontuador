@@ -146,6 +146,13 @@ async def init_db_pool():
            registrado_em TIMESTAMPTZ DEFAULT NOW()
         );
 
+       CREATE TABLE IF NOT EXISTS recomendacao_mensagens (
+           rec_id      INTEGER   NOT NULL REFERENCES recomendacoes(id),
+           chat_id     BIGINT    NOT NULL,
+           message_id  INTEGER   NOT NULL,
+           PRIMARY KEY (rec_id, chat_id)
+        );
+
         -- 1) Guarda cada recomendação de lives (só o essencial)
        CREATE TABLE IF NOT EXISTS recomendacoes (
             id              SERIAL PRIMARY KEY,
@@ -1108,16 +1115,7 @@ async def ranking_top10(update: Update, context: CallbackContext):
 
     linhas = ["🏅 Top 10 de pontos:"]
     for i, u in enumerate(top):
-        choice = u["display_choice"]
-        if choice == "first_name":
-            display = u["first_name"] or u["username"] or "Usuário"
-        elif choice in ("nickname", "anonymous"):
-            display = u["nickname"] or u["username"] or "Usuário"
-        elif choice == "indefinido":
-            display = "Esperando interação"
-        else:
-            display = u["username"] or u["first_name"] or "Usuário"
-
+        display = obter_nome_exibicao(u)
         linhas.append(f"{i + 1}. {display} - {u['pontos']} pts")
 
     texto = "\n".join(linhas)
@@ -1787,6 +1785,30 @@ async def registrar_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Este comando só pode ser usado em grupos.")
 
 
+def obter_nome_exibicao(perfil: dict) -> str:
+    dc = perfil.get("display_choice", "indefinido")
+    first = perfil.get("first_name", "")
+    user = perfil.get("username", "")
+    nick = perfil.get("nickname", "")
+
+    # Ignora placeholders
+    if first.lower() == "vazio":
+        first = ""
+    if user.lower() == "vazio":
+        user = ""
+    if nick.lower() in ("sem nick", "vazio"):
+        nick = ""
+
+    if dc == "first_name":
+        return first or user or "Usuário"
+    elif dc in ("nickname", "anonymous"):
+        return nick or user or "Usuário"
+    elif dc == "indefinido":
+        return "Esperando interação"
+    else:
+        return user or first or "Usuário"
+
+
 # 1️⃣ Handler do comando /live
 async def live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
@@ -1850,11 +1872,7 @@ async def live_receive_moedas(update: Update, context: ContextTypes.DEFAULT_TYPE
         user.id
     )
     dc = perfil["display_choice"]
-    nome = (
-        perfil["first_name"] if dc == "first_name" else
-        perfil["nickname"] if dc == "nickname" else
-        perfil["username"] or "Usuário"
-    )
+    nome = obter_nome_exibicao(perfil)  # <-- faz o tratamento correto
 
     rec = await pool.fetchrow(
         "INSERT INTO recomendacoes (user_id, nome_exibicao, link, moedas) "
@@ -1864,7 +1882,7 @@ async def live_receive_moedas(update: Update, context: ContextTypes.DEFAULT_TYPE
     rec_id = rec["id"]
 
     texto = (
-        f"📣 *{nome}* recomendou uma live com *{moedas} moedas!*\n"
+        f"📣 {nome} recomendou uma live com {moedas} moedas!\n"
         f"🔗 {link}\n\n"
         "Esta recomendação é verdadeira? Vote e ganhe pontos também!"
     )
@@ -1880,7 +1898,11 @@ async def live_receive_moedas(update: Update, context: ContextTypes.DEFAULT_TYPE
                 chat_id=row["chat_id"],
                 text=texto,
                 reply_markup=teclado,
-                parse_mode="Markdown"
+            )
+
+            await pool.execute(
+                "INSERT INTO recomendacao_mensagens (rec_id, chat_id, message_id) VALUES ($1, $2, $3)",
+                rec_id, msg.chat_id, msg.message_id
             )
 
             # agenda exclusão da recomendação após 20 minutos (1200s)
@@ -1917,6 +1939,64 @@ live_conv = ConversationHandler(
     fallbacks=[CommandHandler("cancelar", cancel)],
     allow_reentry=True,
 )
+
+async def detectar_recomendacao_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        print("Ignorando update sem texto")
+        return
+
+    texto = update.message.text.strip()
+    print(f"[DEBUG] Mensagem recebida no grupo: {texto!r}")
+
+    # Regex para link e moedas (ajuste conforme necessidade)
+    import re
+
+    # Exemplo: link que começa com opcional https:// e br.shp.ee seguido de 7-10 caracteres (ajuste se quiser)
+    pattern_link = r"(https?://)?br\.shp\.ee/[a-zA-Z0-9]{7,10}"
+    pattern_moedas = r"\b(\d{1,3})\b"
+
+    link_match = re.search(pattern_link, texto)
+    moedas_match = re.findall(pattern_moedas, texto)
+
+    if not link_match:
+        print("Link não encontrado na mensagem.")
+        return
+    else:
+        link = link_match.group(0)
+        print(f"Link detectado: {link}")
+
+    # Pega a última ocorrência de número >= 5 para moedas
+    moedas = None
+    for m in reversed(moedas_match):
+        if int(m) >= 5:
+            moedas = int(m)
+            break
+
+    if moedas is None:
+        print("Quantidade de moedas válida não encontrada.")
+        return
+    else:
+        print(f"Moedas detectadas: {moedas}")
+
+    # A partir daqui, faça a inserção no banco e demais ações que já tem no seu código.
+    # Só como exemplo:
+    user = update.effective_user
+    perfil = await pool.fetchrow(
+        "SELECT display_choice, first_name, username, nickname FROM usuarios WHERE user_id=$1",
+        user.id
+    )
+    nome = obter_nome_exibicao(perfil)
+
+    rec = await pool.fetchrow(
+        "INSERT INTO recomendacoes (user_id, nome_exibicao, link, moedas) "
+        "VALUES ($1,$2,$3,$4) RETURNING id",
+        user.id, nome, link, moedas
+    )
+    rec_id = rec["id"]
+
+    print(f"Recomendação inserida com id {rec_id}")
+
+    # (Aqui você pode mandar mensagem, criar teclado, etc)
 
 
 MIN_PONTOS_PARA_VOTAR = 16
@@ -1998,11 +2078,9 @@ async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     flag = f"reveal_scheduled:{rec_id}"
     if not context.bot_data.get(flag):
         context.bot_data[flag] = True
-        chat_id    = query.message.chat.id
-        message_id = query.message.message_id
 
         async def revelar():
-            await asyncio.sleep(360)  # tempo para reveçar os votos
+            await asyncio.sleep(60)  # tempo para revelar os votos
 
             votos = await pool.fetch(
                 "SELECT voto FROM recomendacao_votos WHERE rec_id = $1",
@@ -2015,14 +2093,21 @@ async def tratar_voto(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton(f"👍 {positivos}", callback_data="noop"),
                 InlineKeyboardButton(f"👎 {negativos}", callback_data="noop"),
             ]])
-            try:
-                await context.bot.edit_message_reply_markup(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    reply_markup=teclado
-                )
-            except:
-                pass
+
+            mensagens = await pool.fetch(
+                "SELECT chat_id, message_id FROM recomendacao_mensagens WHERE rec_id = $1",
+                rec_id
+            )
+
+            for row in mensagens:
+                try:
+                    await context.bot.edit_message_reply_markup(
+                        chat_id=row["chat_id"],
+                        message_id=row["message_id"],
+                        reply_markup=teclado
+                    )
+                except:
+                    pass
 
         context.application.create_task(revelar())
 
@@ -2231,7 +2316,7 @@ async def main():
     app.add_handler(live_conv)
     app.add_handler(CallbackQueryHandler(tratar_voto, pattern=r"^voto:\d+:[01]$"))
     app.add_handler(CommandHandler("reg", registrar_grupo, filters=filters.ChatType.GROUPS))
-
+    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, detectar_recomendacao_grupo))
 
     app.add_handler(
         ConversationHandler(
