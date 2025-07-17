@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+from urllib.parse import urlparse
 import asyncpg
 import logging
 import itertools
@@ -91,13 +92,6 @@ NIVEIS_BRINDES = {
     1000: "🎁 Brinde nível 5"
 }
 
-PREMIOS_EVENTO_COMPARTILHAR = {
-    1: "🥇 R$75",
-    2: "🥈 R$50",
-    3: "🥉 R$35",
-    (4, 8): "🏅 R$20"
-}
-
 # Estados da conversa
 (ADMIN_SENHA, ESPERANDO_SUPORTE, ADD_PONTOS_POR_ID, ADD_PONTOS_QTD, ADD_PONTOS_MOTIVO, DEL_PONTOS_ID, DEL_PONTOS_QTD,
  DEL_PONTOS_MOTIVO, ADD_ADMIN_ID, REM_ADMIN_ID) = range(10)
@@ -133,6 +127,11 @@ async def init_db_pool():
             pontos INTEGER NOT NULL,
             motivo TEXT NOT NULL DEFAULT 'Não Especificado',
             data TIMESTAMPTZ  DEFAULT CURRENT_TIMESTAMP
+        );
+        
+       CREATE TABLE IF NOT EXISTS config (
+            chave TEXT PRIMARY KEY,
+            valor TEXT NOT NULL
         );
 
        CREATE TABLE IF NOT EXISTS admins (
@@ -218,25 +217,6 @@ async def adicionar_usuario_db(
                         """,
                         user_id, username, first_name, last_name, display_choice, nickname
                     )
-
-                    if old['ultima_interacao'] != hoje_data_sp():
-                        await conn.execute(
-                            """
-                            UPDATE usuarios
-                               SET pontos = pontos + 5,
-                                   ultima_interacao = $1
-                             WHERE user_id = $2::bigint
-                            """,
-                            hoje_data_sp(), user_id
-                        )
-                        await conn.execute(
-                            """
-                            INSERT INTO historico_pontos
-                              (user_id, pontos, motivo)
-                            VALUES ($1::bigint, 5, 'Check-in diário')
-                            """,
-                            user_id
-                        )
             else:
                 logger.info(
                     f"[DB] {user_id} Inserido: via_start={via_start}, username: {username} "
@@ -249,10 +229,10 @@ async def adicionar_usuario_db(
                       (user_id, username, first_name, last_name,
                        display_choice, nickname,
                        inserido_em, ultima_interacao, pontos, via_start)
-                    VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, 5, $8)
+                    VALUES ($1, $2, $3, $4, $5, $6, NOW(), NULL, 0, $7)
                     """,
                     user_id, username, first_name, last_name,
-                    display_choice, nickname, hoje_data_sp(), via_start
+                    display_choice, nickname, via_start
                 )
 
                 await conn.execute(
@@ -262,14 +242,6 @@ async def adicionar_usuario_db(
                     VALUES ($1::bigint, 'Inserido', $2, $3, $4, $5, $6, $7)
                     """,
                     user_id, username, first_name, last_name, display_choice, nickname, via_start
-                )
-
-                await conn.execute(
-                    """
-                    INSERT INTO historico_pontos (user_id, pontos, motivo)
-                    VALUES ($1, 5, 'Check-in diário')
-                    """,
-                    user_id
                 )
 
 
@@ -403,7 +375,7 @@ ADMIN_MENU = (
     "/listar_usuarios – lista de usuarios cadastrados\n"
     "/estatisticas – quantidade total de usuarios cadastrados\n"
     "/listar_via_start – usuario que se cadastraram via start\n"
-)
+    "/backup – Fazer backup\n")
 
 
 # Comando de admin
@@ -483,7 +455,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         via_start=True
     )
 
-    # 2) Pergunta como ele quer aparecer
+    await processar_presenca_diaria(user.id)
+
+    # Pergunta como ele quer aparecer
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("1️⃣ Mostrar nome do jeito que está", callback_data="set:first_name")],
         [InlineKeyboardButton("2️⃣ Escolher um Nick/Apelido", callback_data="set:nickname")],
@@ -732,19 +706,8 @@ async def como_ganhar(update: Update, context: CallbackContext):
         await update.message.reply_text(msg)
         return
 
-    premios_texto = "\n".join(
-        f"{f'{pos}º' if isinstance(pos, int) else f'{pos[0]}º - {pos[1]}º'} {premio}"
-        for pos, premio in PREMIOS_EVENTO_COMPARTILHAR.items()
-    )
-
-    # Ordena os brindes por nível de pontos
-    brindes_texto = "\n".join(
-        f"• {pontos} pontos – {descricao}"
-        for pontos, descricao in sorted(NIVEIS_BRINDES.items())
-    )
-
     texto = (
-        "🎯*Pontos Válidos a Partir de 1 de Maio de 2025 a 30 de Junho*\n\n"
+        "🎯* Ultima Interação Válida a Partir de 1 de Maio de 2025 a 30 de Junho*\n\n"
         "Interações terminadas, em breve novas atualizações"
 
     )
@@ -763,7 +726,7 @@ async def news(update: Update, context: CallbackContext):
 
     await update.message.reply_text(
         "🆕 *Novidades* ( -- 2025)\n\n"
-        "Aparando Ultimo Evento, Novidades em Breve",
+        "Novidades em Breve",
         parse_mode="Markdown"
     )
 
@@ -1053,6 +1016,11 @@ async def processar_presenca_diaria(
         last_name: str,
         bot: Bot
 ) -> int | None:
+    # 🔒 Verifica se check-in está ativado
+    resultado = await pool.fetchrow("SELECT valor FROM config WHERE chave = 'adicionar_pontos'")
+    if not resultado or resultado["valor"] != "true":
+        return None
+
     perfil = await obter_ou_criar_usuario_db(
         user_id=user_id,
         username=username or "vazio",
@@ -1063,7 +1031,7 @@ async def processar_presenca_diaria(
     # Se ainda não pontuou hoje…
     if perfil["ultima_interacao"] != hoje_data_sp():
         # Dá 1 ponto e atualiza última interação
-        novo_total = await atualizar_pontos(user_id, 3, "Presença diária", bot)
+        novo_total = await atualizar_pontos(user_id, 5, "Presença diária", bot)
         await pool.execute(
             "UPDATE usuarios SET ultima_interacao = $1 WHERE user_id = $2::bigint",
             hoje_data_sp(), user_id
@@ -1668,6 +1636,78 @@ async def estatisticas(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Erro ao gerar estatísticas: {e}")
         await update.message.reply_text("❌ Não foi possível gerar as estatísticas no momento")
 
+
+async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if user_id not in ADMINS:
+        await update.message.reply_text("❌ Você não tem permissão para usar /backup.")
+        return
+
+    await update.message.reply_text("🔄 Gerando dump do banco... aguarde.")
+
+    # Extrai dados da DATABASE_URL
+    url = urlparse(os.getenv("DATABASE_URL"))
+    host = url.hostname
+    port = str(url.port or 5432)
+    user = url.username
+    pwd  = url.password
+    db   = url.path.lstrip("/")
+
+    # Gera nome e pasta do dump
+    ts = datetime.now(tz=ZoneInfo("America/Sao_Paulo")).strftime("%Y%m%d_%H%M%S")
+    nome = f"dump_{ts}.sql"
+    pasta = os.getenv("BACKUP_DIR", "./backups")
+    os.makedirs(pasta, exist_ok=True)
+    caminho = os.path.join(pasta, nome)
+
+    # Comando pg_dump plain SQL
+    cmd = [
+        "pg_dump",
+        "-h", host,
+        "-p", port,
+        "-U", user,
+        "-d", db,
+        "-F", "p",
+    ]
+    env = os.environ.copy()
+    env["PGPASSWORD"] = pwd
+
+    # Executa dump
+    proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, env=env)
+    stdout, _ = await proc.communicate()
+
+    if proc.returncode != 0:
+        await update.message.reply_text("❌ Erro ao gerar dump. Veja os logs do servidor.")
+        return
+
+    # Grava arquivo
+    with open(caminho, "wb") as f:
+        f.write(stdout)
+
+    # Informa no chat e, se pequeno, envia o arquivo
+    tamanho = os.path.getsize(caminho)
+    msg = f"✅ Dump gerado em:\n`{caminho}`"
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+    if tamanho < 50 * 1024 * 1024:
+        await update.message.reply_document(document=InputFile(caminho), filename=nome)
+
+
+async def ativar_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await pool.execute(
+        "INSERT INTO config (chave, valor) VALUES ('adicionar_pontos', 'true') "
+        "ON CONFLICT (chave) DO UPDATE SET valor = 'true'"
+    )
+    await update.message.reply_text("✅ Check-in ativado. Usuários agora ganham pontos.")
+
+async def desativar_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await pool.execute(
+        "INSERT INTO config (chave, valor) VALUES ('adicionar_pontos', 'false') "
+        "ON CONFLICT (chave) DO UPDATE SET valor = 'false'"
+    )
+    await update.message.reply_text("❌ Check-in desativado. Nenhum usuário ganhará pontos.")
+
+
 async def on_startup(app):
     global ADMINS
     # 1) inicializa o pool
@@ -1765,6 +1805,7 @@ async def main():
     app.add_handler(CommandHandler('historico', historico, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(callback_historico, pattern=r"^hist:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(paginacao_via_start, pattern=r"^via_start:\d+$"))
+    app.add_handler(CommandHandler("backup", cmd_backup))
 
     app.add_handler(CommandHandler('rank_top10', ranking_top10))
     app.add_handler(CommandHandler("historico_user", historico_usuario, filters=filters.ChatType.PRIVATE))
@@ -1773,6 +1814,8 @@ async def main():
     app.add_handler(CommandHandler("estatisticas", estatisticas, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('como_ganhar', como_ganhar, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("news", news, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("checkin_on", ativar_checkin))
+    app.add_handler(CommandHandler("checkin_off", desativar_checkin))
 
     # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
