@@ -131,7 +131,7 @@ async def init_db_pool():
         
        CREATE TABLE IF NOT EXISTS config (
             chave TEXT PRIMARY KEY,
-            valor TEXT NOT NULL
+            valor TEXT NOT NULL 
         );
 
        CREATE TABLE IF NOT EXISTS admins (
@@ -311,8 +311,8 @@ async def setup_commands(app):
     try:
         comandos_basicos = [
             BotCommand("inicio", "Volte ao começo"),
-            BotCommand("meus_pontos", "Ver sua pontuação e nível"),
-            BotCommand("rank_top10", "Top 10 de usuários por pts"),
+            BotCommand("meus_pontos", "Sua pontuação e nível"),
+            BotCommand("rank_top10", "Top 10 Pontuadores"),
 
         ]
 
@@ -324,9 +324,9 @@ async def setup_commands(app):
 
         # 2) Comandos em chat privado (com suporte)
         comandos_privados = comandos_basicos + [
-            BotCommand("historico", "Mostrar seu histórico de pontos"),
-            BotCommand("como_ganhar", "Como ganhar mais pontos"),
-            BotCommand("news", "Ver Novas Atualizações"),
+            BotCommand("historico", "Mostrar seu histórico"),
+            BotCommand("como_ganhar", "Como ganhar pontos"),
+            BotCommand("news", "Ver Atualizações"),
         ]
 
         await app.bot.set_my_commands(
@@ -440,22 +440,41 @@ ESCOLHENDO_DISPLAY, DIGITANDO_NICK = range(2)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
+    user_id = user.id
+    username = user.username or "vazio"
+    first_name = user.first_name or "vazio"
+    last_name = user.last_name or "vazio"
+
+    logger.info(f"[start] Início para user_id={user_id}, username={username}, first_name={first_name}")
+
     # 🔒 Verifica se está no canal
     ok, msg = await verificar_canal(user.id, context.bot)
+    logger.info(f"[start] verificar_canal para user_id={user_id} resultado: {ok}")
     if not ok:
         await update.message.reply_text(msg)
         return ConversationHandler.END
 
+    # Checa valor da configuração 'adicionar_pontos'
+    config = await pool.fetchrow("SELECT valor FROM config WHERE chave = 'adicionar_pontos'")
+    if config:
+        logger.info(f"[start] Config 'adicionar_pontos' = {config['valor']}")
+    else:
+        logger.warning("[start] Config 'adicionar_pontos' não encontrada")
+
     # 1) Verifica se já existe registro; só insere uma vez
-    await obter_ou_criar_usuario_db(
-        user_id=user.id,
-        username=user.username or "vazio",
-        first_name=user.first_name or "vazio",
-        last_name=user.last_name or "vazio",
+    perfil = await obter_ou_criar_usuario_db(
+        user_id=user_id,
+        username=username,
+        first_name=first_name,
+        last_name=last_name,
         via_start=True
     )
+    logger.info(f"[start] Perfil obtido/criado: {perfil}")
 
-    await processar_presenca_diaria(user.id)
+    await processar_presenca_diaria(
+        perfil=perfil,  # passa o perfil direto
+        bot=context.bot
+    )
 
     # Pergunta como ele quer aparecer
     keyboard = InlineKeyboardMarkup([
@@ -464,8 +483,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("3️⃣ Ficar anônimo", callback_data="set:anonymous")],
     ])
     await update.message.reply_text(
-        f"🤖 Bem-vindo, {user.first_name}! Ao Prosseguir você aceita os termos de uso do bot \n"
-        f" Para começar, caso você alcance o Ranking, como você gostaria de aparecer?",
+        f"🤖 Bem-vindo, {user.first_name}! Ao Prosseguir você aceita os termos de uso do bot \n\n"
+        f"Para começar, caso você alcance o Ranking, como você gostaria de aparecer?",
         reply_markup=keyboard
     )
     return ESCOLHENDO_DISPLAY
@@ -653,13 +672,14 @@ async def meus_pontos(update: Update, context: CallbackContext):
 
     try:
         # 1) Processa presença diária (vai dar 1 ponto se ainda não pontuou hoje)
-        await processar_presenca_diaria(
-            user_id,
-            username,
-            first_name or "",
-            last_name or "",
-            context.bot
+        perfil = await obter_ou_criar_usuario_db(
+            user_id=user_id,
+            username=username,
+            first_name=first_name,
+            last_name=last_name
         )
+
+        await processar_presenca_diaria(perfil, context.bot)
 
         # 2) Busca o perfil já com os pontos atualizados
         perfil = await pool.fetchrow(
@@ -675,7 +695,7 @@ async def meus_pontos(update: Update, context: CallbackContext):
             pontos
         )
         if nivel == 0:
-            nivel_texto = "rumo ao Nível 1"
+            nivel_texto = "Rumo ao nível 1"
         else:
             nivel_texto = f"Eba! Já alcançou brinde de Nível {nivel}"
 
@@ -870,11 +890,12 @@ async def atualizar_pontos(
         user_id, username, first_name, last_name
     )
     if not usuario:
+        logger.warning(f"Usuário {user_id} não encontrado para atualizar pontos")
         return None
 
     pontos_atuais = usuario['pontos'] or 0
     novos = pontos_atuais + delta
-    nivel = 0
+    logger.info(f"[atualizar_pontos] user_id={user_id} pontos_atuais={pontos_atuais} delta={delta} novos={novos}")
 
     await registrar_historico_db(user_id, delta, motivo)
 
@@ -889,6 +910,7 @@ async def atualizar_pontos(
         """,
         novos, nivel, user_id
     )
+    logger.info(f"[atualizar_pontos] Pontos atualizados no banco para user_id={user_id}")
     return novos
 
 
@@ -1000,38 +1022,33 @@ async def tratar_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user is None or user.is_bot:
         return
 
-    await processar_presenca_diaria(
+    perfil = await obter_ou_criar_usuario_db(
         user_id=user.id,
         username=user.username or "vazio",
         first_name=user.first_name or "vazio",
-        last_name=user.last_name or "vazio",
-        bot=context.bot
+        last_name=user.last_name or "vazio"
     )
 
+    await processar_presenca_diaria(perfil, context.bot)
 
-async def processar_presenca_diaria(
-        user_id: int,
-        username: str,
-        first_name: str,
-        last_name: str,
-        bot: Bot
-) -> int | None:
-    # 🔒 Verifica se check-in está ativado
+
+import logging
+logger = logging.getLogger(__name__)
+
+async def processar_presenca_diaria(perfil: asyncpg.Record | dict, bot: Bot) -> int | None:
+    logger.info(f"[processar_presenca_diaria] user_id={perfil['user_id']} última interação: {perfil['ultima_interacao']}")
+
     resultado = await pool.fetchrow("SELECT valor FROM config WHERE chave = 'adicionar_pontos'")
     if not resultado or resultado["valor"] != "true":
+        logger.info("[processar_presenca_diaria] Check-in desativado na configuração")
         return None
 
-    perfil = await obter_ou_criar_usuario_db(
-        user_id=user_id,
-        username=username or "vazio",
-        first_name=first_name or "vazio",
-        last_name=last_name or "vazio",
-        via_start=False  # Porque foi no grupo
-    )
-    # Se ainda não pontuou hoje…
-    if perfil["ultima_interacao"] != hoje_data_sp():
-        # Dá 1 ponto e atualiza última interação
+    user_id = perfil["user_id"]
+    ultima_interacao = perfil["ultima_interacao"]
+
+    if ultima_interacao != hoje_data_sp():
         novo_total = await atualizar_pontos(user_id, 5, "Presença diária", bot)
+
         await pool.execute(
             "UPDATE usuarios SET ultima_interacao = $1 WHERE user_id = $2::bigint",
             hoje_data_sp(), user_id
@@ -1046,7 +1063,6 @@ async def cancel(update: Update, conText: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "❌ Operação cancelada. Nenhum dado foi salvo."
     )
-    return ConversationHandler.END
     return ConversationHandler.END
 
 
@@ -1710,10 +1726,16 @@ async def desativar_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def on_startup(app):
     global ADMINS
-    # 1) inicializa o pool
+
+    #inicializa o pool
     await init_db_pool()
 
-    # 2) carrega do banco e mescla (sem sobrescrever o que veio do .env)
+    await pool.execute("""
+        INSERT INTO config (chave, valor) VALUES ('adicionar_pontos', 'true')
+        ON CONFLICT (chave) DO NOTHING
+    """)
+
+    # Carrega do banco e mescla (sem sobrescrever o que veio do .env)
     existing = await carregar_admins_db()
     ADMINS.update(existing)
     logger.info(f"🛡️ Admins após iniciar: {ADMINS}")
