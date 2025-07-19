@@ -134,6 +134,15 @@ async def init_db_pool():
             valor TEXT NOT NULL 
         );
 
+       CREATE TABLE IF NOT EXISTS fila_reclamacoes (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            username TEXT,
+            display_name TEXT NOT NULL,
+            pedido_id TEXT NOT NULL,
+            criado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+
        CREATE TABLE IF NOT EXISTS admins (
             user_id BIGINT PRIMARY KEY
         );
@@ -310,7 +319,6 @@ async def verificar_canal(user_id: int, bot: Bot) -> tuple[bool, str]:
 async def setup_commands(app):
     try:
         comandos_basicos = [
-            BotCommand("inicio", "Volte ao começo"),
             BotCommand("meus_pontos", "Sua pontuação e nível"),
             BotCommand("rank_top10", "Top 10 Pontuadores"),
 
@@ -324,6 +332,8 @@ async def setup_commands(app):
 
         # 2) Comandos em chat privado (com suporte)
         comandos_privados = comandos_basicos + [
+            BotCommand("inicio", "Volte ao começo"),
+            BotCommand("reclamar", "Reclame pontos não dados"),
             BotCommand("historico", "Mostrar seu histórico"),
             BotCommand("como_ganhar", "Como ganhar pontos"),
             BotCommand("news", "Ver Atualizações"),
@@ -341,6 +351,7 @@ async def setup_commands(app):
 
 COMANDOS_PUBLICOS = [
     ("/meus_pontos", "Ver sua pontuação e nível"),
+    ("/reclamar", "Reclame pontos não dados"),
     ("/historico", "Mostrar seu histórico de pontos"),
     ("/rank_top10", "Top 10 de usuários por pontos"),
     ("/como_ganhar", "Como ganhar mais pontos"),
@@ -348,7 +359,7 @@ COMANDOS_PUBLICOS = [
 ]
 
 async def enviar_menu(chat_id: int, bot):
-    texto_menu = "👋 Olá! Aqui estão os comandos que você pode usar:\n\n"
+    texto_menu = "👋 Tudo Certo! Aqui estão os comandos que você pode usar:\n\n"
     for cmd, desc in COMANDOS_PUBLICOS:
         texto_menu += f"{cmd} — {desc}\n"
     await bot.send_message(chat_id=chat_id, text=texto_menu)
@@ -368,13 +379,15 @@ async def cmd_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 ADMIN_MENU = (
     "🔧 *Menu Admin* 🔧\n\n"
-    "/add - atribuir pontos a um usuário\n"
-    "/del – remover pontos de um usuário\n"
-    "/historico_usuario – historico de nomes do usuário\n"
+    "/add - atribuir pontos usuário\n"
+    "/fila - ver fila de reclamações\n"
+    "/resolver - resolver reclamações\n"
+    "/del – remover pontos de usuário\n"
+    "/historico_usuario – historico de nomes de usuario\n"
     "/rem – remover admin\n"
     "/listar_usuarios – lista de usuarios cadastrados\n"
-    "/estatisticas – quantidade total de usuarios cadastrados\n"
-    "/listar_via_start – usuario que se cadastraram via start\n"
+    "/estatisticas – quantidade total cadastrados\n"
+    "/listar_via_start – que se cadastraram via start\n"
     "/backup – Fazer backup\n")
 
 
@@ -1653,6 +1666,156 @@ async def estatisticas(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Não foi possível gerar as estatísticas no momento")
 
 
+RECLAMAR_ID = 1  # estado do ConversationHandler
+CHAT_ID_SUPORTE = -1002563145936  # grupo para onde as reclamações vão
+
+# Início do comando
+async def reclamar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("📦 Por favor, envie o ID do seu pedido concluido (ex: FTG5F8U99IG5YY6):")
+    return RECLAMAR_ID
+
+# Recebe o ID do pedido
+async def receber_id_reclamacao(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.effective_user
+    pedido_id = update.message.text.strip()
+
+    display_name = user.username or user.first_name or "Usuário"
+    await adicionar_reclamacao_db(user.id, user.username, display_name, pedido_id)
+
+    # Envia para o grupo de suporte:
+    nome = escape_markdown_v2(user.username or user.first_name or "desconhecido")
+    pedido_id = escape_markdown_v2(pedido_id)
+
+    msg = (
+        f"🚨 Nova Reclamação\n"
+        f"👤 {nome} ({user.id})\n"
+        f"📦 Pedido: `{pedido_id}`\n"
+    )
+    await context.bot.send_message(
+        chat_id=CHAT_ID_SUPORTE,
+        text=msg,
+        parse_mode='Markdown'
+    )
+    # Responde ao usuário
+    await update.message.reply_text("✅ Sua reclamação foi registrada. Vamos verificar e entraremos em contato se necessário.")
+    return ConversationHandler.END
+
+
+async def adicionar_reclamacao_db(user_id: int, username: str | None, display_name: str, pedido_id: str):
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO fila_reclamacoes (user_id, username, display_name, pedido_id) VALUES ($1, $2, $3, $4)",
+            user_id, username, display_name, pedido_id
+        )
+
+# Buscar todas as reclamações
+async def listar_reclamacoes_db():
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            "SELECT id, user_id, username, display_name, pedido_id "
+            "FROM fila_reclamacoes "
+            "ORDER BY criado_em"
+        )
+
+# Remover reclamação pelo id
+async def remover_reclamacao_db(reclamacao_id: int):
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM fila_reclamacoes WHERE id = $1", reclamacao_id)
+
+async def adicionar_reclamacao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    pedido_id = context.args[0] if context.args else None
+    if not pedido_id:
+        await update.message.reply_text("❌ Use: /reclamar <ID do pedido>")
+        return
+
+    await adicionar_reclamacao_db(user.id, user.username or user.first_name, pedido_id)
+    await update.message.reply_text("✅ Reclamação registrada com sucesso!")
+
+async def mostrar_fila(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rows = await listar_reclamacoes_db()
+    if not rows:
+        return await update.message.reply_text("🎉 Nenhuma reclamação pendente.")
+
+    texto = "📌 *Fila de Reclamações Pendentes:*\n\n"
+    for i, row in enumerate(rows, 1):
+        nome = f"@{row['username']}" if row['username'] else row['display_name']
+        texto += f"{i}. 👤 {nome} — 🎯 `{row['pedido_id']}` (id: {row['id']})\n"
+
+    await update.message.reply_text(texto, parse_mode="Markdown")
+
+
+RESOLVER_ID = 2      # estado para receber o pedido_id
+RESOLVER_MSG = 3     # estado para receber a mensagem customizada
+
+# 1) Inicia o fluxo pedindo o pedido_id
+async def iniciar_resolver(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text(
+        "🔍 Por favor, envie o *ID do pedido* que deseja resolver:",
+        parse_mode="Markdown"
+    )
+    return RESOLVER_ID
+
+# 2) Recebe o pedido_id, valida existência e pergunta a mensagem
+async def receber_pedido_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    pedido_id = update.message.text.strip()
+    # Busca a reclamação com esse pedido_id
+    row = await pool.fetchrow(
+        "SELECT id, user_id, pedido_id FROM fila_reclamacoes WHERE pedido_id = $1",
+        pedido_id
+    )
+    if not row:
+        await update.message.reply_text(
+            "❌ Não encontrei nenhuma reclamação com esse ID. Tente novamente:"
+        )
+        return RESOLVER_ID
+
+    # Guarda no contexto para usar depois
+    context.user_data["reclamacao_sel"] = row
+    await update.message.reply_text(
+        "✍️ Agora digite a *mensagem* que será enviada ao usuário (ex: “resolvido”, “rejeitado” ou detalhes):",
+        parse_mode="Markdown"
+    )
+    return RESOLVER_MSG
+
+# 3) Recebe a mensagem, remove a reclamação e envia notificações
+async def receber_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    texto_custom = update.message.text.strip()
+    reclamacao = context.user_data.pop("reclamacao_sel")
+
+    # Remove do banco
+    await pool.execute(
+        "DELETE FROM fila_reclamacoes WHERE id = $1",
+        reclamacao["id"]
+    )
+
+    # Envia ao usuário
+    try:
+        await context.bot.send_message(
+            chat_id=reclamacao["user_id"],
+            text=(
+                f"📬 Sua reclamação sobre `{reclamacao['pedido_id']}` foi analisada:\n\n"
+                f"{texto_custom}"
+            ),
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
+
+    # Confirma no grupo de suporte
+    await update.message.reply_text("✅ Mensagem enviada e reclamação removida da fila.")
+    return ConversationHandler.END
+
+# 4) Registrar o ConversationHandler
+resolver_conv = ConversationHandler(
+    entry_points=[CommandHandler("resolver", iniciar_resolver)],
+    states={
+        RESOLVER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_pedido_id)],
+        RESOLVER_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem)],
+    },
+    fallbacks=[],
+)
+
 async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMINS:
@@ -1745,10 +1908,10 @@ async def on_startup(app):
 
 main_conv = ConversationHandler(
     entry_points=[
-        CommandHandler("admin", admin, filters=filters.ChatType.PRIVATE),
-        CommandHandler("add", add_pontos),
-        CommandHandler("del", del_pontos),
-        CommandHandler("rem_admin", rem_admin),
+        CommandHandler("admin2", admin),
+        CommandHandler("add", add_pontos, filters=filters.ChatType.PRIVATE),
+        CommandHandler("del", del_pontos, filters=filters.ChatType.PRIVATE),
+        CommandHandler("rem_admin", rem_admin, filters=filters.ChatType.PRIVATE),
     ],
     states={
         # /admin → senha
@@ -1804,6 +1967,16 @@ async def main():
 
     app.add_handler(main_conv)
 
+    reclamar_conv = ConversationHandler(
+        entry_points=[CommandHandler("reclamar", reclamar)],
+        states={
+            RECLAMAR_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_id_reclamacao)],
+        },
+        fallbacks=[],
+    )
+
+    app.add_handler(reclamar_conv)
+
     app.add_handler(
         ConversationHandler(
             entry_points=[CommandHandler("start", start, filters=filters.ChatType.PRIVATE)],
@@ -1830,7 +2003,7 @@ async def main():
     app.add_handler(CommandHandler("backup", cmd_backup))
 
     app.add_handler(CommandHandler('rank_top10', ranking_top10))
-    app.add_handler(CommandHandler("historico_user", historico_usuario, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("historico_usuario", historico_usuario, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("listar_usuarios", listar_usuarios, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("listar_via_start", listar_via_start, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("estatisticas", estatisticas, filters=filters.ChatType.PRIVATE))
@@ -1838,6 +2011,8 @@ async def main():
     app.add_handler(CommandHandler("news", news, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("checkin_on", ativar_checkin))
     app.add_handler(CommandHandler("checkin_off", desativar_checkin))
+    app.add_handler(CommandHandler("fila", mostrar_fila))
+    app.add_handler(resolver_conv)
 
     # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
