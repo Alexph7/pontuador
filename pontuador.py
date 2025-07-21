@@ -1679,6 +1679,13 @@ async def receber_id_reclamacao(update: Update, context: ContextTypes.DEFAULT_TY
     user = update.effective_user
     pedido_id = update.message.text.strip()
 
+    # ✅ Validação: apenas letras, números, hífen ou underline, com 13 a 17 caracteres
+    if not re.fullmatch(r'^[a-zA-Z0-9_-]{13,17}$', pedido_id):
+        await update.message.reply_text(
+            "❌ O ID do pedido está fora do formato."
+        )
+        return RECLAMAR_ID
+
     display_name = user.username or user.first_name or "Usuário"
     await adicionar_reclamacao_db(user.id, user.username, display_name, pedido_id)
 
@@ -1726,7 +1733,6 @@ async def adicionar_reclamacao(update: Update, context: ContextTypes.DEFAULT_TYP
     user = update.effective_user
     pedido_id = context.args[0] if context.args else None
     if not pedido_id:
-        await update.message.reply_text("❌ Use: /reclamar <ID do pedido>")
         return
 
     await adicionar_reclamacao_db(user.id, user.username or user.first_name, pedido_id)
@@ -1737,10 +1743,10 @@ async def mostrar_fila(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not rows:
         return await update.message.reply_text("🎉 Nenhuma reclamação pendente.")
 
-    texto = "📌 *Fila de Reclamações Pendentes:*\n\n"
+    texto = "📌 *Reclamações Pendentes:*\n\n"
     for i, row in enumerate(rows, 1):
         nome = f"@{row['username']}" if row['username'] else row['display_name']
-        texto += f"{i}. 👤 {nome} — 🎯 `{row['pedido_id']}` (id: {row['id']})\n"
+        texto += f"{i}. 👤 {nome} — `{row['pedido_id']}`\n"
 
     await update.message.reply_text(texto, parse_mode="Markdown")
 
