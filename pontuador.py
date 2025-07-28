@@ -98,7 +98,7 @@ NIVEIS_BRINDES = {
 
 TEMPO_LIMITE_BUSCA = 10  # Tempo máximo (em segundos) para consulta
 
-ranking_mensagens_top10 = {}
+ranking_mensagens_top = {}
 
 async def init_db_pool():
     global pool
@@ -320,7 +320,7 @@ async def setup_commands(app):
     try:
         comandos_basicos = [
             BotCommand("meus_pontos", "Sua pontuação e nível"),
-            BotCommand("rank_top10", "Top 10 Pontuadores"),
+            BotCommand("rank_tops", "Ranking pontuadores"),
 
         ]
 
@@ -353,7 +353,7 @@ COMANDOS_PUBLICOS = [
     ("/meus_pontos", "Ver sua pontuação e nível"),
     ("/reclamar", "Reclame pontos não dados"),
     ("/historico", "Mostrar seu histórico de pontos"),
-    ("/rank_top10", "Top 10 de usuários por pontos"),
+    ("/rank_tops", "Ranking usuários por pontos"),
     ("/como_ganhar", "Como ganhar mais pontos"),
     ("/news", "Ver Novas Atualizações"),
 ]
@@ -388,6 +388,8 @@ ADMIN_MENU = (
     "/listar_usuarios – lista de usuarios cadastrados\n"
     "/estatisticas – quantidade total cadastrados\n"
     "/listar_via_start – que se cadastraram via start\n"
+    "/checkin_on – ativa pontos no checkin\n"
+    "/checkin_off – desativa pontos no checkin\n"
     "/backup – Fazer backup\n")
 
 
@@ -959,7 +961,7 @@ async def historico(update: Update, context: CallbackContext):
     await update.message.reply_text("🗒️ Seu histórico de pontos:\n\n" + "\n\n".join(lines))
 
 
-async def ranking_top10(update: Update, context: CallbackContext):
+async def ranking_tops(update: Update, context: CallbackContext):
     user = update.effective_user
     user_id = user.id
     username = user.username or ""
@@ -968,21 +970,24 @@ async def ranking_top10(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
 
     # 1) Presença diária unificada — agora com 5 args:
-    await processar_presenca_diaria(
-        user_id,
-        username,
-        first_name,
-        last_name,
-        context.bot
+    perfil = await obter_ou_criar_usuario_db(
+        user_id=user_id,
+        username=username,
+        first_name=first_name,
+        last_name=last_name
     )
 
     if update.effective_chat.type == "private":
+        await processar_presenca_diaria(
+            perfil = perfil,
+            bot = context.bot
+        )
         invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
         if invalido:
             await update.message.reply_text(msg)
             return
 
-    mensagem_antiga_id = ranking_mensagens_top10.get(chat_id)
+    mensagem_antiga_id = ranking_mensagens_top.get(chat_id)
     if mensagem_antiga_id:
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=mensagem_antiga_id)
@@ -1001,16 +1006,18 @@ async def ranking_top10(update: Update, context: CallbackContext):
             pontos
         FROM usuarios
         ORDER BY pontos DESC
-        LIMIT 10
+        LIMIT 20
         """
     )
 
     if not top:
         msg = await update.message.reply_text("🏅 Nenhum usuário cadastrado no ranking.")
-        ranking_mensagens_top10[chat_id] = msg.message_id
+        ranking_mensagens_top[chat_id] = msg.message_id
         return
 
-    linhas = ["🏅 Top 10 de pontos:"]
+    linhas = ["🏆 <b>Ranking Geral Top 20</b>\n"]
+    medalhas = ["🥇", "🥈", "🥉"] + ["🏅"] * 17
+
     for i, u in enumerate(top):
         choice = u["display_choice"]
         if choice == "first_name":
@@ -1018,16 +1025,23 @@ async def ranking_top10(update: Update, context: CallbackContext):
         elif choice in ("nickname", "anonymous"):
             display = u["nickname"] or u["username"] or "Usuário"
         elif choice == "indefinido":
-            display = "Esperando interação"
+            display = "Esp. interação"
         else:
             display = u["username"] or u["first_name"] or "Usuário"
 
-        linhas.append(f"{i + 1}. {display} - {u['pontos']} pts")
+        pontos = u["pontos"]
+        medalha = medalhas[i] if i < len(medalhas) else "🎖️"
+
+        linhas.append(f"{medalha} <b>{display}</b> — <code>{pontos} pts</code>")
 
     texto = "\n".join(linhas)
-    msg = await update.message.reply_text(texto)
 
-    ranking_mensagens_top10[chat_id] = msg.message_id
+    msg = await update.message.reply_text(
+        texto,
+        parse_mode=ParseMode.HTML  # ou telegram.constants.ParseMode.HTML, dependendo da sua versão
+    )
+
+    ranking_mensagens_top[chat_id] = msg.message_id
 
 
 async def tratar_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1670,40 +1684,58 @@ RECLAMAR_ID = 1  # estado do ConversationHandler
 CHAT_ID_SUPORTE = -1002563145936  # grupo para onde as reclamações vão
 
 # Início do comando
+RECLAMAR_NOME = 1
+RECLAMAR_DATA = 2
+CHAT_ID_SUPORTE = -1002563145936  # grupo para onde as reclamações vão
+
+# Início do comando
 async def reclamar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("📦 Por favor, envie o ID do seu pedido concluido (ex: FTG5F8U99IG5YY6):")
-    return RECLAMAR_ID
+    await update.message.reply_text("📦 Envie o nome do produto concluído que deseja reclamar:")
+    return RECLAMAR_NOME
 
-# Recebe o ID do pedido
-async def receber_id_reclamacao(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+# Recebe o nome do pedido
+async def receber_nome_reclamacao(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    nome_pedido = update.message.text.strip()
+    if len(nome_pedido) < 3 or len(nome_pedido) > 50:
+        await update.message.reply_text("❌ O nome do pedido está muito curto ou muito longo. Tente novamente.")
+        return RECLAMAR_NOME
+
+    context.user_data["nome_pedido"] = nome_pedido
+    await update.message.reply_text("📅 Agora envie a data em que o pedido foi feito no formato `DD MM` (por exemplo: 02 07 nesse caso seria dois de julho, o dia e o mes com dois digitos cada):")
+    return RECLAMAR_DATA
+
+# Recebe a data
+async def receber_data_reclamacao(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.effective_user
-    pedido_id = update.message.text.strip()
+    data = update.message.text.strip()
 
-    # ✅ Validação: apenas letras, números, hífen ou underline, com 13 a 17 caracteres
-    if not re.fullmatch(r'^[a-zA-Z0-9_-]{13,17}$', pedido_id):
-        await update.message.reply_text(
-            "❌ O ID do pedido está fora do formato."
-        )
-        return RECLAMAR_ID
+    if not re.fullmatch(r"\d{2} \d{2}", data):
+        await update.message.reply_text("❌ Formato inválido. Use `DD MM` (por exemplo: 02 07 - o dia e o mes com dois digitos cada).")
+        return RECLAMAR_DATA
 
+    nome_pedido = context.user_data.get("nome_pedido", "desconhecido")
+
+    # Salva no banco se desejar
     display_name = user.username or user.first_name or "Usuário"
-    await adicionar_reclamacao_db(user.id, user.username, display_name, pedido_id)
+    await adicionar_reclamacao_db(user.id, user.username, display_name, f"{nome_pedido} ({data})")
 
-    # Envia para o grupo de suporte:
-    nome = escape_markdown_v2(user.username or user.first_name or "desconhecido")
-    pedido_id = escape_markdown_v2(pedido_id)
+    # Escapa para Markdown V2
+    nome = escape_markdown_v2(display_name)
+    pedido = escape_markdown_v2(nome_pedido)
+    data_md = escape_markdown_v2(data)
 
     msg = (
         f"🚨 Nova Reclamação\n"
         f"👤 {nome} ({user.id})\n"
-        f"📦 Pedido: `{pedido_id}`\n"
+        f"📦 Pedido: `{pedido}`\n"
+        f"📅 Data: {data_md}"
     )
     await context.bot.send_message(
         chat_id=CHAT_ID_SUPORTE,
         text=msg,
         parse_mode='Markdown'
     )
-    # Responde ao usuário
+
     await update.message.reply_text("✅ Sua reclamação foi registrada. Vamos verificar e entraremos em contato se necessário.")
     return ConversationHandler.END
 
@@ -1976,7 +2008,8 @@ async def main():
     reclamar_conv = ConversationHandler(
         entry_points=[CommandHandler("reclamar", reclamar)],
         states={
-            RECLAMAR_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_id_reclamacao)],
+            RECLAMAR_NOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nome_reclamacao)],
+            RECLAMAR_DATA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_data_reclamacao)],
         },
         fallbacks=[],
     )
@@ -2008,7 +2041,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(paginacao_via_start, pattern=r"^via_start:\d+$"))
     app.add_handler(CommandHandler("backup", cmd_backup))
 
-    app.add_handler(CommandHandler('rank_top10', ranking_top10))
+    app.add_handler(CommandHandler('rank_tops', ranking_tops))
     app.add_handler(CommandHandler("historico_usuario", historico_usuario, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("listar_usuarios", listar_usuarios, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("listar_via_start", listar_via_start, filters=filters.ChatType.PRIVATE))
