@@ -1,25 +1,21 @@
 import os
 import re
 import sys
+from random import random
 from urllib.parse import urlparse
 import asyncpg
 import logging
-import itertools
+import random
 import nest_asyncio
-from operator import attrgetter  # ou itemgetter
-from time import perf_counter
-from asyncpg import UniqueViolationError, PostgresError, CannotConnectNowError, ConnectionDoesNotExistError
 import asyncio
-import io
 import math
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, User
 from telegram import Update, Bot
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler
-from typing import Dict, Any
 from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder, ContextTypes
 from telegram import BotCommand, BotCommandScopeDefault, BotCommandScopeAllPrivateChats
@@ -83,7 +79,6 @@ if admin_ids_env:
         logger.error("ADMIN_IDS deve conter apenas números separados por vírgula.")
 logger.info(f"🛡️ Admins carregados da configuração: {ADMINS}")
 
-
 NIVEIS_BRINDES = {
     200: "🎁 Brinde nível 1",
     300: "🎁 Brinde nível 2",
@@ -99,6 +94,7 @@ NIVEIS_BRINDES = {
 TEMPO_LIMITE_BUSCA = 10  # Tempo máximo (em segundos) para consulta
 
 ranking_mensagens_top = {}
+
 
 async def init_db_pool():
     global pool
@@ -129,22 +125,57 @@ async def init_db_pool():
             data TIMESTAMPTZ  DEFAULT CURRENT_TIMESTAMP
         );
         
-       CREATE TABLE IF NOT EXISTS config (
-            chave TEXT PRIMARY KEY,
-            valor TEXT NOT NULL 
-        );
-
-       CREATE TABLE IF NOT EXISTS fila_reclamacoes (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            username TEXT,
-            display_name TEXT NOT NULL,
-            pedido_id TEXT NOT NULL,
-            criado_em TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+       CREATE TABLE IF NOT EXISTS config_checkin (  
+            chave TEXT PRIMARY KEY,  -- chave é adicionar pontos por checkin
+            valor TEXT NOT NULL   -- valor é true para pontuar por checkin e false pra nao pontuar
         );
 
        CREATE TABLE IF NOT EXISTS admins (
             user_id BIGINT PRIMARY KEY
+        );
+
+       -- tabela de canais para uso em sorteio_config
+       CREATE TABLE IF NOT EXISTS canais (
+            id   BIGINT PRIMARY KEY,
+            nome TEXT
+        );
+        
+       CREATE TABLE ganhadores_bloqueados (
+            user_id BIGINT PRIMARY KEY,
+            bloqueado_em TIMESTAMP DEFAULT NOW()
+        );
+
+                               
+       CREATE TABLE IF NOT EXISTS sorteio_config (
+            id                          SERIAL PRIMARY KEY,
+            canal_id                    BIGINT REFERENCES canais(id) ON DELETE SET NULL,
+            criado_em                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            ativo                       BOOLEAN    NOT NULL DEFAULT TRUE,
+        
+            total_montante              NUMERIC    NOT NULL,
+            valor_premio                NUMERIC    NOT NULL,
+            premios_iniciais            INT        NOT NULL,
+            premios_restantes           INT        NOT NULL,
+        
+            total_participantes_esperados INT     NOT NULL,  -- Nº base de participantes
+            tentativas_por_usuario        INT     NOT NULL DEFAULT 3,  -- Nº de tentativas antes do cooldown
+            cooldown_minutos              INT     NOT NULL DEFAULT 5,  -- Minutos de espera após esgotar
+            tentativa_atual               INT     NOT NULL DEFAULT 0,  -- Contador de tentativas no evento
+            numero_esperado_atual         INT     NOT NULL        -- Número que o usuário deve acertar
+        );
+
+       CREATE TABLE IF NOT EXISTS sorteio_tentativas (
+            event_id INT NOT NULL REFERENCES sorteio_config(id) ON DELETE CASCADE,
+            user_id BIGINT NOT NULL,
+            tentado_em TIMESTAMPTZ DEFAULT NOW(),
+            PRIMARY KEY (event_id, user_id, tentado_em)
+        );
+
+       CREATE TABLE IF NOT EXISTS sorteio_ganhadores (
+            event_id INT NOT NULL REFERENCES sorteio_config(id) ON DELETE CASCADE,
+            user_id BIGINT NOT NULL,
+            ganho_em TIMESTAMPTZ DEFAULT NOW(),
+            PRIMARY KEY (event_id, user_id)
         );
                     
        CREATE TABLE IF NOT EXISTS usuario_history (
@@ -316,11 +347,13 @@ async def verificar_canal(user_id: int, bot: Bot) -> tuple[bool, str]:
             "Tente novamente mais tarde."
         )
 
+
 async def setup_commands(app):
     try:
         comandos_basicos = [
             BotCommand("meus_pontos", "Sua pontuação e nível"),
             BotCommand("rank_tops", "Ranking pontuadores"),
+            #BotCommand("sortear", "Sortear")
 
         ]
 
@@ -333,7 +366,6 @@ async def setup_commands(app):
         # 2) Comandos em chat privado (com suporte)
         comandos_privados = comandos_basicos + [
             BotCommand("inicio", "Volte ao começo"),
-            BotCommand("reclamar", "Reclame pontos não dados"),
             BotCommand("historico", "Mostrar seu histórico"),
             BotCommand("como_ganhar", "Como ganhar pontos"),
             BotCommand("news", "Ver Atualizações"),
@@ -351,18 +383,19 @@ async def setup_commands(app):
 
 COMANDOS_PUBLICOS = [
     ("/meus_pontos", "Ver sua pontuação e nível"),
-    ("/reclamar", "Reclame pontos não dados"),
     ("/historico", "Mostrar seu histórico de pontos"),
     ("/rank_tops", "Ranking usuários por pontos"),
     ("/como_ganhar", "Como ganhar mais pontos"),
     ("/news", "Ver Novas Atualizações"),
 ]
 
+
 async def enviar_menu(chat_id: int, bot):
     texto_menu = "👋 Tudo Certo! Aqui estão os comandos que você pode usar:\n\n"
     for cmd, desc in COMANDOS_PUBLICOS:
         texto_menu += f"{cmd} — {desc}\n"
     await bot.send_message(chat_id=chat_id, text=texto_menu)
+
 
 # mantém enviar_menu(chat_id: int, bot: Bot) do jeito que você já definiu
 
@@ -377,11 +410,10 @@ async def cmd_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await enviar_menu(update.effective_chat.id, context.bot)
 
+
 ADMIN_MENU = (
     "🔧 *Menu Admin* 🔧\n\n"
     "/add - atribuir pontos usuário\n"
-    "/fila - ver fila de reclamações\n"
-    "/resolver - resolver reclamações\n"
     "/del – remover pontos de usuário\n"
     "/historico_usuario – historico de nomes de usuario\n"
     "/rem – remover admin\n"
@@ -390,6 +422,10 @@ ADMIN_MENU = (
     "/listar_via_start – que se cadastraram via start\n"
     "/checkin_on – ativa pontos no checkin\n"
     "/checkin_off – desativa pontos no checkin\n"
+    "/configurar_sort – configurar novo sorteio\n"
+    "/sort_status – ver status do sorteio\n"
+    "/cancelar_sort – cancelar sorteio\n"
+    "/list_ganhadores_sort – listar ganhadores atuais\n"
     "/backup – Fazer backup\n")
 
 
@@ -470,11 +506,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     # Checa valor da configuração 'adicionar_pontos'
-    config = await pool.fetchrow("SELECT valor FROM config WHERE chave = 'adicionar_pontos'")
-    if config:
-        logger.info(f"[start] Config 'adicionar_pontos' = {config['valor']}")
+    config_checkin = await pool.fetchrow("SELECT valor FROM config_checkin WHERE chave = 'adicionar_pontos'")
+    if config_checkin:
+        logger.info(f"[start] Config_checkin 'adicionar_pontos' = {config_checkin['valor']}")
     else:
-        logger.warning("[start] Config 'adicionar_pontos' não encontrada")
+        logger.warning("[start] Config_checkin 'adicionar_pontos' não encontrada")
 
     # 1) Verifica se já existe registro; só insere uma vez
     perfil = await obter_ou_criar_usuario_db(
@@ -765,6 +801,7 @@ async def news(update: Update, context: CallbackContext):
         parse_mode="Markdown"
     )
 
+
 async def add_pontos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
         Inicia o fluxo de atribuição de pontos.
@@ -979,8 +1016,8 @@ async def ranking_tops(update: Update, context: CallbackContext):
 
     if update.effective_chat.type == "private":
         await processar_presenca_diaria(
-            perfil = perfil,
-            bot = context.bot
+            perfil=perfil,
+            bot=context.bot
         )
         invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
         if invalido:
@@ -1058,14 +1095,13 @@ async def tratar_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await processar_presenca_diaria(perfil, context.bot)
 
-
-import logging
 logger = logging.getLogger(__name__)
 
 async def processar_presenca_diaria(perfil: asyncpg.Record | dict, bot: Bot) -> int | None:
-    logger.info(f"[processar_presenca_diaria] user_id={perfil['user_id']} última interação: {perfil['ultima_interacao']}")
+    logger.info(
+        f"[processar_presenca_diaria] user_id={perfil['user_id']} última interação: {perfil['ultima_interacao']}")
 
-    resultado = await pool.fetchrow("SELECT valor FROM config WHERE chave = 'adicionar_pontos'")
+    resultado = await pool.fetchrow("SELECT valor FROM config_checkin WHERE chave = 'adicionar_pontos'")
     if not resultado or resultado["valor"] != "true":
         logger.info("[processar_presenca_diaria] Check-in desativado na configuração")
         return None
@@ -1680,179 +1716,6 @@ async def estatisticas(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Não foi possível gerar as estatísticas no momento")
 
 
-RECLAMAR_ID = 1  # estado do ConversationHandler
-CHAT_ID_SUPORTE = -1002563145936  # grupo para onde as reclamações vão
-
-# Início do comando
-RECLAMAR_NOME = 1
-RECLAMAR_DATA = 2
-CHAT_ID_SUPORTE = -1002563145936  # grupo para onde as reclamações vão
-
-# Início do comando
-async def reclamar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("📦 Envie o nome do produto concluído que deseja reclamar:")
-    return RECLAMAR_NOME
-
-# Recebe o nome do pedido
-async def receber_nome_reclamacao(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    nome_pedido = update.message.text.strip()
-    if len(nome_pedido) < 3 or len(nome_pedido) > 50:
-        await update.message.reply_text("❌ O nome do pedido está muito curto ou muito longo. Tente novamente.")
-        return RECLAMAR_NOME
-
-    context.user_data["nome_pedido"] = nome_pedido
-    await update.message.reply_text("📅 Agora envie a data em que o pedido foi feito no formato `DD MM` (por exemplo: 02 07 nesse caso seria dois de julho, o dia e o mes com dois digitos cada):")
-    return RECLAMAR_DATA
-
-# Recebe a data
-async def receber_data_reclamacao(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
-    data = update.message.text.strip()
-
-    if not re.fullmatch(r"\d{2} \d{2}", data):
-        await update.message.reply_text("❌ Formato inválido. Use `DD MM` (por exemplo: 02 07 - o dia e o mes com dois digitos cada).")
-        return RECLAMAR_DATA
-
-    nome_pedido = context.user_data.get("nome_pedido", "desconhecido")
-
-    # Salva no banco se desejar
-    display_name = user.username or user.first_name or "Usuário"
-    await adicionar_reclamacao_db(user.id, user.username, display_name, f"{nome_pedido} ({data})")
-
-    # Escapa para Markdown V2
-    nome = escape_markdown_v2(display_name)
-    pedido = escape_markdown_v2(nome_pedido)
-    data_md = escape_markdown_v2(data)
-
-    msg = (
-        f"🚨 Nova Reclamação\n"
-        f"👤 {nome} ({user.id})\n"
-        f"📦 Pedido: `{pedido}`\n"
-        f"📅 Data: {data_md}"
-    )
-    await context.bot.send_message(
-        chat_id=CHAT_ID_SUPORTE,
-        text=msg,
-        parse_mode='Markdown'
-    )
-
-    await update.message.reply_text("✅ Sua reclamação foi registrada. Vamos verificar e entraremos em contato se necessário.")
-    return ConversationHandler.END
-
-
-async def adicionar_reclamacao_db(user_id: int, username: str | None, display_name: str, pedido_id: str):
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO fila_reclamacoes (user_id, username, display_name, pedido_id) VALUES ($1, $2, $3, $4)",
-            user_id, username, display_name, pedido_id
-        )
-
-# Buscar todas as reclamações
-async def listar_reclamacoes_db():
-    async with pool.acquire() as conn:
-        return await conn.fetch(
-            "SELECT id, user_id, username, display_name, pedido_id "
-            "FROM fila_reclamacoes "
-            "ORDER BY criado_em"
-        )
-
-# Remover reclamação pelo id
-async def remover_reclamacao_db(reclamacao_id: int):
-    async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM fila_reclamacoes WHERE id = $1", reclamacao_id)
-
-async def adicionar_reclamacao(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    pedido_id = context.args[0] if context.args else None
-    if not pedido_id:
-        return
-
-    await adicionar_reclamacao_db(user.id, user.username or user.first_name, pedido_id)
-    await update.message.reply_text("✅ Reclamação registrada com sucesso!")
-
-async def mostrar_fila(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    rows = await listar_reclamacoes_db()
-    if not rows:
-        return await update.message.reply_text("🎉 Nenhuma reclamação pendente.")
-
-    texto = "📌 *Reclamações Pendentes:*\n\n"
-    for i, row in enumerate(rows, 1):
-        nome = f"@{row['username']}" if row['username'] else row['display_name']
-        texto += f"{i}. 👤 {nome} — `{row['pedido_id']}`\n"
-
-    await update.message.reply_text(texto, parse_mode="Markdown")
-
-
-RESOLVER_ID = 2      # estado para receber o pedido_id
-RESOLVER_MSG = 3     # estado para receber a mensagem customizada
-
-# 1) Inicia o fluxo pedindo o pedido_id
-async def iniciar_resolver(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text(
-        "🔍 Por favor, envie o *ID do pedido* que deseja resolver:",
-        parse_mode="Markdown"
-    )
-    return RESOLVER_ID
-
-# 2) Recebe o pedido_id, valida existência e pergunta a mensagem
-async def receber_pedido_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    pedido_id = update.message.text.strip()
-    # Busca a reclamação com esse pedido_id
-    row = await pool.fetchrow(
-        "SELECT id, user_id, pedido_id FROM fila_reclamacoes WHERE pedido_id = $1",
-        pedido_id
-    )
-    if not row:
-        await update.message.reply_text(
-            "❌ Não encontrei nenhuma reclamação com esse ID. Tente novamente:"
-        )
-        return RESOLVER_ID
-
-    # Guarda no contexto para usar depois
-    context.user_data["reclamacao_sel"] = row
-    await update.message.reply_text(
-        "✍️ Agora digite a *mensagem* que será enviada ao usuário (ex: “resolvido”, “rejeitado” ou detalhes):",
-        parse_mode="Markdown"
-    )
-    return RESOLVER_MSG
-
-# 3) Recebe a mensagem, remove a reclamação e envia notificações
-async def receber_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    texto_custom = update.message.text.strip()
-    reclamacao = context.user_data.pop("reclamacao_sel")
-
-    # Remove do banco
-    await pool.execute(
-        "DELETE FROM fila_reclamacoes WHERE id = $1",
-        reclamacao["id"]
-    )
-
-    # Envia ao usuário
-    try:
-        await context.bot.send_message(
-            chat_id=reclamacao["user_id"],
-            text=(
-                f"📬 Sua reclamação sobre `{reclamacao['pedido_id']}` foi analisada:\n\n"
-                f"{texto_custom}"
-            ),
-            parse_mode="Markdown"
-        )
-    except Exception:
-        pass
-
-    # Confirma no grupo de suporte
-    await update.message.reply_text("✅ Mensagem enviada e reclamação removida da fila.")
-    return ConversationHandler.END
-
-# 4) Registrar o ConversationHandler
-resolver_conv = ConversationHandler(
-    entry_points=[CommandHandler("resolver", iniciar_resolver)],
-    states={
-        RESOLVER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_pedido_id)],
-        RESOLVER_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem)],
-    },
-    fallbacks=[],
-)
 
 async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -1867,8 +1730,8 @@ async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     host = url.hostname
     port = str(url.port or 5432)
     user = url.username
-    pwd  = url.password
-    db   = url.path.lstrip("/")
+    pwd = url.password
+    db = url.path.lstrip("/")
 
     # Gera nome e pasta do dump
     ts = datetime.now(tz=ZoneInfo("America/Sao_Paulo")).strftime("%Y%m%d_%H%M%S")
@@ -1912,27 +1775,381 @@ async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def ativar_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await pool.execute(
-        "INSERT INTO config (chave, valor) VALUES ('adicionar_pontos', 'true') "
+        "INSERT INTO config_checkin (chave, valor) VALUES ('adicionar_pontos', 'true') "
         "ON CONFLICT (chave) DO UPDATE SET valor = 'true'"
     )
     await update.message.reply_text("✅ Check-in ativado. Usuários agora ganham pontos.")
 
+
 async def desativar_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await pool.execute(
-        "INSERT INTO config (chave, valor) VALUES ('adicionar_pontos', 'false') "
+        "INSERT INTO config_checkin (chave, valor) VALUES ('adicionar_pontos', 'false') "
         "ON CONFLICT (chave) DO UPDATE SET valor = 'false'"
     )
     await update.message.reply_text("❌ Check-in desativado. Nenhum usuário ganhará pontos.")
+
+# Estados do ConversationHandler
+CONFIG_SORTEIO_MONTANTE = 1
+CONFIG_SORTEIO_PREMIO = 2
+CONFIG_SORTEIO_QTD_PARTICIPANTES = 3
+CONFIG_SORTEIO_TENTATIVAS_POR_USUARIO = 4
+CONFIG_SORTEIO_COOLDOWN = 5
+CONFIG_SORTEIO_CONFIRMACAO = 6
+
+# Timeout e constantes
+COOLDOWN_MINUTOS = 5
+async def setar_canal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+
+    if chat.type not in ["channel", "group", "supergroup"]:
+        await update.message.reply_text("Este comando deve ser usado em um canal ou grupo.")
+        return
+
+    canal_id = chat.id
+    nome = chat.title or chat.username or str(canal_id)
+
+    # Exemplo: salvando no banco
+    await pool.execute(
+        "INSERT INTO canais (id, nome) VALUES ($1, $2) "
+        "ON CONFLICT (id) DO UPDATE SET nome = EXCLUDED.nome",
+        canal_id, nome
+    )
+    context.bot_data["canal_id"] = canal_id
+    await update.message.reply_text(f"✅ Canal/grupo registrado.")
+
+async def configurar_sort(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("🎁 Qual o montante total a distribuir em reais?")
+    return CONFIG_SORTEIO_MONTANTE
+
+async def receber_montante(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        montante = float(update.message.text.replace(",", "."))
+        if montante <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("❌ Valor inválido. Envie apenas um número maior que zero.")
+        return CONFIG_SORTEIO_MONTANTE
+
+    context.user_data["montante"] = montante
+    await update.message.reply_text("💰 Qual o valor de cada prêmio (em R$)?")
+    return CONFIG_SORTEIO_PREMIO
+
+async def receber_valor_premio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        valor = float(update.message.text.replace(",", "."))
+        if valor <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("❌ Valor inválido. Envie apenas um número maior que zero.")
+        return CONFIG_SORTEIO_PREMIO
+
+    context.user_data["valor_premio"] = valor
+    await update.message.reply_text(
+        "👥 Quantos participantes participarão do sorteio?\n\n"
+        "_Base usada para definir tentativas e sorteios sequenciais._",
+        parse_mode="Markdown"
+    )
+    return CONFIG_SORTEIO_QTD_PARTICIPANTES
+
+async def receber_qtd_participantes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        qtd = int(update.message.text)
+        if qtd <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("❌ Envie um número válido de participantes.")
+        return CONFIG_SORTEIO_QTD_PARTICIPANTES
+
+    context.user_data["qtd_participantes"] = qtd
+    await update.message.reply_text("🔁 Quantas tentativas cada participante terá?")
+    return CONFIG_SORTEIO_TENTATIVAS_POR_USUARIO
+
+async def receber_tentativas_por_usuario(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        tentativas = int(update.message.text)
+        if tentativas <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("❌ Envie um número válido maior que zero.")
+        return CONFIG_SORTEIO_TENTATIVAS_POR_USUARIO
+
+    context.user_data["tentativas_por_usuario"] = tentativas
+    await update.message.reply_text("⏱ Qual o tempo de espera (em minutos) entre tentativas?")
+    return CONFIG_SORTEIO_COOLDOWN
+
+async def receber_cooldown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        cooldown = int(update.message.text)
+        if cooldown < 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("❌ Envie um número válido (em minutos).")
+        return CONFIG_SORTEIO_COOLDOWN
+
+    context.user_data["cooldown"] = cooldown
+
+    montante = context.user_data["montante"]
+    valor_premio = context.user_data["valor_premio"]
+    qtd_premios = int(montante // valor_premio)
+    context.user_data["qtd_premios"] = qtd_premios
+
+    resumo = (
+        f"*Resumo do sorteio:*\n"
+        f"• Montante total: R${montante:.2f}\n"
+        f"• Valor por prêmio: R${valor_premio:.2f}\n"
+        f"• Prêmios totais: {qtd_premios}\n"
+        f"• Participantes: {context.user_data['qtd_participantes']}\n"
+        f"• Tentativas por participante: {context.user_data['tentativas_por_usuario']}\n"
+        f"• Cooldown entre tentativas: {context.user_data['cooldown']} minuto(s)\n\n"
+        f"Confirma a criação do sorteio?"
+    )
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("👍 Sim", callback_data="confirmar_sorteio"),
+            InlineKeyboardButton("👎 Cancelar", callback_data="cancelar_sorteio"),
+        ]
+    ])
+    await update.message.reply_text(resumo, reply_markup=keyboard, parse_mode="Markdown")
+    return CONFIG_SORTEIO_CONFIRMACAO
+
+
+async def confirmar_sorteio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+
+    montante = context.user_data["montante"]
+    valor_premio = context.user_data["valor_premio"]
+    qtd_premios = context.user_data["qtd_premios"]
+    canal_id = context.bot_data.get("canal_id")
+
+    numero_sorteado = random.randint(1, context.user_data["qtd_participantes"])
+
+    await context.bot_data["pool"].execute("""
+        INSERT INTO sorteio_config
+            (canal_id, criado_em, ativo, total_montante, valor_premio,
+             premios_iniciais, premios_restantes, total_participantes_esperados,
+             tentativas_por_usuario, cooldown_minutos, tentativa_atual, numero_esperado_atual)
+        VALUES ($1, NOW(), TRUE, $2, $3, $4, $4, $5, $6, $7, 0, $8)
+    """, canal_id, montante, valor_premio, qtd_premios,
+         context.user_data["qtd_participantes"],
+         context.user_data["tentativas_por_usuario"],
+         context.user_data["cooldown"],
+         numero_sorteado)
+
+    # Limpa tentativas e ganhadores anteriores
+    await context.bot_data["pool"].execute("DELETE FROM sorteio_tentativas")
+    await context.bot_data["pool"].execute("DELETE FROM sorteio_ganhadores")
+
+    await query.edit_message_text("✅ Sorteio configurado com sucesso!")
+    return ConversationHandler.END
+
+async def cancelar_sort(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Desativa o sorteio ativo
+    await context.bot_data["pool"].execute(
+        "UPDATE sorteio_config SET ativo = FALSE WHERE ativo = TRUE"
+    )
+    # Limpa tentativas e ganhadores do evento desativado
+    await context.bot_data["pool"].execute(
+        "DELETE FROM sorteio_tentativas WHERE event_id = (SELECT id FROM sorteio_config ORDER BY criado_em DESC LIMIT 1)"
+    )
+    await context.bot_data["pool"].execute(
+        "DELETE FROM sorteio_ganhadores WHERE event_id = (SELECT id FROM sorteio_config ORDER BY criado_em DESC LIMIT 1)"
+    )
+    # Notifica o admin
+    await update.message.reply_text("❌ Sorteio vigente cancelado e dados limpos. Pronto para nova configuração.")
+
+
+# Defina o chat de suporte logo após as importações
+CHAT_ID_SUPORTE = -1002563145936  # substitua pelo seu ID real
+
+async def sortear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id
+    agora = datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
+
+    # Verifica se está bloqueado por sorteios anteriores
+    # Verifica se está bloqueado por sorteios anteriores
+    bloqueado = await context.bot_data["pool"].fetchval(
+        "SELECT 1 FROM sorteio_bloqueados WHERE user_id = $1",
+        user_id
+    )
+    if bloqueado:
+        return await update.message.reply_text(
+            "🚫 Você já ganhou recentemente espere algum tempo e será liberado novamente.")
+
+    inscrito, msg = await verificar_canal(user_id, context.bot)
+    if not inscrito:
+        return await update.message.reply_text(msg)
+
+    canal_id = context.bot_data.get("canal_id")
+    if not canal_id:
+        return await update.message.reply_text("❌ Canal de sorteio não configurado.")
+
+    # Busca evento ativo
+    evento = await context.bot_data["pool"].fetchrow(
+        "SELECT * FROM sorteio_config WHERE ativo = TRUE ORDER BY criado_em DESC LIMIT 1"
+    )
+    if not evento:
+        return await update.message.reply_text("❌ Nenhum sorteio configurado.")
+
+    if evento["premios_restantes"] <= 0:
+        return await update.message.reply_text("❌ Todos os prêmios já foram distribuídos.")
+
+    # Verifica se usuário já ganhou
+    ganhou = await context.bot_data["pool"].fetchval(
+        "SELECT 1 FROM sorteio_ganhadores WHERE event_id = $1 AND user_id = $2",
+        evento["id"], user_id
+    )
+    if ganhou:
+        return await update.message.reply_text("⚠️ Você já ganhou neste evento.")
+
+    # Busca última tentativa (ganhando ou não) do usuário
+    ultima = await context.bot_data["pool"].fetchval(
+        "SELECT MAX(tentado_em) FROM sorteio_tentativas WHERE user_id = $1 AND event_id = $2",
+        user_id, evento["id"]
+    )
+
+    if ultima and ultima.tzinfo is None:
+        ultima = ultima.replace(tzinfo=ZoneInfo("America/Sao_Paulo"))
+
+    if ultima and agora - ultima < timedelta(minutes=evento["cooldown_minutos"]):
+        restante = timedelta(minutes=evento["cooldown_minutos"]) - (agora - ultima)
+        minutos = int(restante.total_seconds() // 60) + 1
+        return await update.message.reply_text(f"⏱ Aguarde {minutos} minuto(s) para tentar novamente.")
+
+    await context.bot_data["pool"].execute(
+        "INSERT INTO sorteio_tentativas (event_id, user_id, tentado_em) VALUES ($1, $2, $3)",
+        evento["id"], user_id, agora
+    )
+
+    # Atualiza tentativa atual
+    tentativa_atual = evento["tentativa_atual"] + 1
+    await context.bot_data["pool"].execute(
+        "UPDATE sorteio_config SET tentativa_atual = $1 WHERE id = $2",
+        tentativa_atual, evento["id"]
+    )
+
+    # Verifica se acertou o número esperado
+    if tentativa_atual == evento["numero_esperado_atual"]:
+        await context.bot_data["pool"].execute(
+            "INSERT INTO sorteio_ganhadores (event_id, user_id, ganho_em) VALUES ($1, $2, $3)",
+            evento["id"], user_id, agora
+        )
+        await context.bot_data["pool"].execute(
+            "UPDATE sorteio_config SET premios_restantes = premios_restantes - 1, tentativa_atual = 0, numero_esperado_atual = $1 WHERE id = $2",
+            random.randint(1, evento["total_participantes_esperados"]),
+            evento["id"]
+        )
+
+        # Nome do usuário com fallback
+        if user.username:
+            nome = f"@{user.username}"
+        elif user.first_name:
+            nome = user.first_name
+        elif user.last_name:
+            nome = user.last_name
+        else:
+            nome = "sem nick"
+
+        # Link para a mensagem original (se possível)
+        chat = update.effective_chat
+        message = update.message
+        if chat.type in ["group", "supergroup"] and chat.id < 0:
+            msg_link = f"https://t.me/c/{str(chat.id)[4:]}/{message.message_id}"
+            texto_admin = (
+                f"🎉 {nome} ganhou R${evento['valor_premio']:.2f} no sorteio #{evento['id']}!\n"
+                f"Prêmios restantes: {evento['premios_restantes'] - 1}\n"
+                f"🔗 [Ver mensagem]({msg_link})"
+            )
+        else:
+            texto_admin = (
+                f"🎉 {nome} ganhou R${evento['valor_premio']:.2f} no sorteio #{evento['id']}!\n"
+                f"Prêmios restantes: {evento['premios_restantes'] - 1}"
+            )
+
+        await context.bot.send_message(
+            chat_id=CHAT_ID_SUPORTE,
+            text=texto_admin,
+            parse_mode="Markdown"
+        )
+
+        await context.bot_data["pool"].execute(
+            "INSERT INTO sorteio_bloqueados (user_id) VALUES ($1) ON CONFLICT DO NOTHING",
+            user_id
+        )
+
+        nome_display = user.username or user.first_name or user.last_name or "sem nick"
+        mensagem_publica = (
+            f"🎉 {nome_display} ganhou R${evento['valor_premio']:.2f} no sorteio!\n"
+        )
+        await context.bot.send_message(chat_id=canal_id, text=mensagem_publica)
+
+        return await update.message.reply_text(
+            f"🎉 Parabéns! Você ganhou R${evento['valor_premio']:.2f}!\n"
+            f"Prêmios restantes: {evento['premios_restantes'] - 1}"
+        )
+
+    return await update.message.reply_text(
+        f"😔 Não foi dessa vez. Tente novamente em {evento['cooldown_minutos']} minutos!"
+    )
+
+async def liberar_ganhadores(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ADMINS = context.bot_data.get("chat_admin", set())
+    user_id = update.effective_user.id
+
+    if user_id not in ADMINS:
+        return await update.message.reply_text("❌ Apenas administradores podem usar este comando.")
+
+    await context.bot_data["pool"].execute("DELETE FROM sorteio_bloqueados")
+    await update.message.reply_text("✅ Todos os ganhadores foram liberados para participar novamente.")
+
+
+async def sort_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    estado = await context.bot_data["pool"].fetchrow(
+        """
+        SELECT premios_restantes, tentativa_atual, numero_esperado_atual
+          FROM sorteio_config
+         WHERE ativo = TRUE
+         ORDER BY criado_em DESC
+         LIMIT 1
+        """
+    )
+    if not estado:
+        return await update.message.reply_text("❌ Nenhum sorteio ativo.")
+    await update.message.reply_text(
+        f"📊 Prêmios restantes: {estado['premios_restantes']}\n"
+        f"Tentativa atual: {estado['tentativa_atual']}\n"
+        f"Número a acertar: {estado['numero_esperado_atual']}"
+    )
+
+async def list_ganhadores_sort(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rows = await context.bot_data["pool"].fetch(
+        """
+        SELECT user_id, ganho_em
+          FROM sorteio_ganhadores
+         WHERE event_id = (
+             SELECT id FROM sorteio_config
+              WHERE ativo = TRUE
+              ORDER BY criado_em DESC
+              LIMIT 1
+         )
+        """
+    )
+    if not rows:
+        return await update.message.reply_text("🏆 Ainda não há ganhadores.")
+    lista = "\n".join(f"- {r['user_id']} em {r['ganho_em']}" for r in rows)
+    await update.message.reply_text(f"🏆 Ganhadores:\n{lista}")
 
 
 async def on_startup(app):
     global ADMINS
 
-    #inicializa o pool
+    # inicializa o pool
     await init_db_pool()
+    app.bot_data["pool"] = pool
 
     await pool.execute("""
-        INSERT INTO config (chave, valor) VALUES ('adicionar_pontos', 'true')
+        INSERT INTO config_checkin (chave, valor) VALUES ('adicionar_pontos', 'true')
         ON CONFLICT (chave) DO NOTHING
     """)
 
@@ -1940,6 +2157,20 @@ async def on_startup(app):
     existing = await carregar_admins_db()
     ADMINS.update(existing)
     logger.info(f"🛡️ Admins após iniciar: {ADMINS}")
+    app.bot_data["chat_admin"] = ADMINS
+
+    # Busca canal do sorteio no banco e converte para int
+    canal_id_str = await pool.fetchval("SELECT valor FROM config_checkin WHERE chave = 'sorteio_canal_id'")
+    if canal_id_str:
+        try:
+            canal_id = int(canal_id_str)
+            app.bot_data["canal_id"] = canal_id
+            logger.info(f"[DEBUG on_startup] canal_id_str='{canal_id_str}', canal_id={canal_id} ({type(canal_id)})")
+        except ValueError:
+            logger.error(f"⚠️ Valor inválido para canal_id: {canal_id_str}")
+    else:
+        logger.info("[DEBUG on_startup] nenhum canal_id_str encontrado")
+
     # 3) (opcional) configure seus comandos globais
     await setup_commands(app)
 
@@ -2005,17 +2236,6 @@ async def main():
 
     app.add_handler(main_conv)
 
-    reclamar_conv = ConversationHandler(
-        entry_points=[CommandHandler("reclamar", reclamar)],
-        states={
-            RECLAMAR_NOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nome_reclamacao)],
-            RECLAMAR_DATA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_data_reclamacao)],
-        },
-        fallbacks=[],
-    )
-
-    app.add_handler(reclamar_conv)
-
     app.add_handler(
         ConversationHandler(
             entry_points=[CommandHandler("start", start, filters=filters.ChatType.PRIVATE)],
@@ -2032,6 +2252,32 @@ async def main():
             allow_reentry=True,
         )
     )
+    sort_config_conv = ConversationHandler(
+        entry_points=[CommandHandler("configurar_sort", configurar_sort)],
+        states={
+            CONFIG_SORTEIO_MONTANTE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_montante)
+            ],
+            CONFIG_SORTEIO_PREMIO: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_valor_premio)
+            ],
+            CONFIG_SORTEIO_COOLDOWN: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_cooldown)
+            ],
+            CONFIG_SORTEIO_QTD_PARTICIPANTES: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_qtd_participantes)
+            ],
+            CONFIG_SORTEIO_TENTATIVAS_POR_USUARIO: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_tentativas_por_usuario)
+            ],
+            CONFIG_SORTEIO_CONFIRMACAO: [
+                CallbackQueryHandler(confirmar_sorteio, pattern="^confirmar_sorteio$"),
+                CallbackQueryHandler(cancelar_sort, pattern="^cancelar_sorteio$")
+            ],
+        },
+        fallbacks=[CommandHandler("cancelar", cancelar_sort)],
+        allow_reentry=True,
+    )
 
     app.add_handler(CommandHandler("inicio", cmd_inicio, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('admin', admin, filters=filters.ChatType.PRIVATE))
@@ -2040,6 +2286,9 @@ async def main():
     app.add_handler(CallbackQueryHandler(callback_historico, pattern=r"^hist:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(paginacao_via_start, pattern=r"^via_start:\d+$"))
     app.add_handler(CommandHandler("backup", cmd_backup))
+    #app.add_handler(CommandHandler("sortear", sortear))
+    app.add_handler(CommandHandler("set", setar_canal))
+    app.add_handler(sort_config_conv)
 
     app.add_handler(CommandHandler('rank_tops', ranking_tops))
     app.add_handler(CommandHandler("historico_usuario", historico_usuario, filters=filters.ChatType.PRIVATE))
@@ -2050,8 +2299,10 @@ async def main():
     app.add_handler(CommandHandler("news", news, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("checkin_on", ativar_checkin))
     app.add_handler(CommandHandler("checkin_off", desativar_checkin))
-    app.add_handler(CommandHandler("fila", mostrar_fila))
-    app.add_handler(resolver_conv)
+    app.add_handler(CommandHandler("sort_status", sort_status))
+    app.add_handler(CommandHandler("cancelar_sort", cancelar_sort))
+    app.add_handler(CommandHandler("liberar_ganhadores", liberar_ganhadores, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("list_ganhadores_sort", list_ganhadores_sort))
 
     # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
