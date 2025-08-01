@@ -367,6 +367,7 @@ async def setup_commands(app):
         comandos_privados = comandos_basicos + [
             BotCommand("inicio", "Volte ao começo"),
             BotCommand("historico", "Mostrar seu histórico"),
+            BotCommand("list_pontuadores", "listar usuarios acima de 100 pontos"),
             BotCommand("como_ganhar", "Como ganhar pontos"),
             BotCommand("news", "Ver Atualizações"),
         ]
@@ -487,7 +488,6 @@ async def remover_admin_db(user_id: int):
 
 ESCOLHENDO_DISPLAY, DIGITANDO_NICK = range(2)
 
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
@@ -539,7 +539,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=keyboard
     )
     return ESCOLHENDO_DISPLAY
-
 
 async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -593,7 +592,6 @@ async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TY
     # (Opcional) se vier qualquer outra callback_data
     return ConversationHandler.END
 
-
 async def receber_nickname(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     nick = update.message.text.strip()
@@ -611,7 +609,6 @@ async def receber_nickname(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown")
     await enviar_menu(update.effective_chat.id, context.bot)
     return ConversationHandler.END
-
 
 async def perfil_invalido_ou_nao_inscrito(user_id: int, bot: Bot) -> tuple[bool, str]:
     # 1️⃣ Verifica se está no canal, usando o méto do já pronto
@@ -632,9 +629,7 @@ async def perfil_invalido_ou_nao_inscrito(user_id: int, bot: Bot) -> tuple[bool,
 
     return False, ""  # está tudo OK
 
-
 USUARIOS_POR_PAGINA = 20
-
 
 async def listar_via_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     page = int(context.args[0]) if context.args and context.args[0].isdigit() else 1
@@ -2139,6 +2134,89 @@ async def list_ganhadores_sort(update: Update, context: ContextTypes.DEFAULT_TYP
     lista = "\n".join(f"- {r['user_id']} em {r['ganho_em']}" for r in rows)
     await update.message.reply_text(f"🏆 Ganhadores:\n{lista}")
 
+# Quantos itens por página
+PAGE_SIZE_RANKING = 50
+
+async def listar_ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 1) Determina a página (default = 1)
+    args = context.args or []
+    try:
+        page = int(args[0]) if args else 1
+    except ValueError:
+        await update.message.reply_text("❌ Página inválida. Use /ranking <número>.")
+        return
+    if page < 1:
+        page = 1
+
+    # 2) Conta só quem tem ≥100 pontos ➡️
+    total_usuarios = await pool.fetchval(
+        "SELECT COUNT(*) FROM usuarios WHERE pontos >= $1",
+        100
+    )
+    total_paginas = max(1, math.ceil(total_usuarios / PAGE_SIZE_RANKING))
+    if page > total_paginas:
+        await update.message.reply_text(
+            f"ℹ️ A página {page} não existe. Só há {total_paginas} páginas."
+        )
+        return
+
+    # 3) Busca a página atual, do maior para o menor ➡️
+    offset = (page - 1) * PAGE_SIZE_RANKING
+    rows = await pool.fetch(
+        """
+        SELECT user_id, pontos, display_choice, first_name, nickname
+        FROM usuarios
+        WHERE pontos >= $1
+        ORDER BY pontos DESC
+        LIMIT $2 OFFSET $3
+        """,
+        100, PAGE_SIZE_RANKING, offset
+    )
+
+    # 4) Monta o texto mostrando o display escolhido em /start
+    lines = []
+    for i, row in enumerate(rows, start=1):
+        indice = offset + i
+        # Se escolheu aparecer com o first_name, usamos ele; senão, o nickname salvo
+        if row["display_choice"] == "first_name":
+            display = row["first_name"]
+        else:
+            display = row["nickname"]
+        lines.append(f"{indice}. {display} — {row['pontos']} pontos")
+
+    header = (
+        f"🏆 **Ranking (≥100 pontos) — página {page}/{total_paginas} "
+        f"(total {total_usuarios})**\n\n"
+    )
+    texto = header + "\n".join(lines)
+
+    # 5) Botões de navegação
+    buttons = []
+    if page > 1:
+        buttons.append(InlineKeyboardButton("◀️ Anterior", callback_data=f"ranking|{page-1}"))
+    if page < total_paginas:
+        buttons.append(InlineKeyboardButton("Próximo ▶️", callback_data=f"ranking|{page+1}"))
+    reply_markup = InlineKeyboardMarkup([buttons]) if buttons else None
+
+    # 6) Envia ou edita mensagem
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(
+            texto, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup
+        )
+    else:
+        await update.message.reply_text(
+            texto, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup
+        )
+
+# Callback para tratar os cliques
+async def callback_listar_ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()  # para parar o spinner
+    # Extrai a nova página de "ranking|<n>"
+    _, nova_pagina = update.callback_query.data.split("|")
+    context.args = [nova_pagina]
+    await listar_ranking(update, context)
+
 
 async def on_startup(app):
     global ADMINS
@@ -2303,6 +2381,8 @@ async def main():
     app.add_handler(CommandHandler("cancelar_sort", cancelar_sort))
     app.add_handler(CommandHandler("liberar_ganhadores", liberar_ganhadores, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("list_ganhadores_sort", list_ganhadores_sort))
+    app.add_handler(CommandHandler("list_pontuadores",listar_ranking,filters=filters.ChatType.PRIVATE))
+    app.add_handler(CallbackQueryHandler(callback_listar_ranking,pattern=r"^ranking\|\d+$"))
 
     # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
