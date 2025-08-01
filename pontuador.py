@@ -2180,12 +2180,15 @@ async def listar_ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Se escolheu aparecer com o first_name, usamos ele; senão, o nickname salvo
         if row["display_choice"] == "first_name":
             display = row["first_name"]
-        else:
+        elif row["display_choice"] == "nickname":
             display = row["nickname"]
+        elif row["display_choice"] == "anonymous":
+            display = row["nickname"]
+        else:  # 'indefinido' ou valor estranho
+            display = "Esp. interação"
         lines.append(f"{indice}. {display} — {row['pontos']} pontos")
-
     header = (
-        f"🏆 **Ranking (≥100 pontos) — página {page}/{total_paginas} "
+        f"🏆 **Lista Usuarios (≥100 pontos) — página {page}/{total_paginas} "
         f"(total {total_usuarios})**\n\n"
     )
     texto = header + "\n".join(lines)
