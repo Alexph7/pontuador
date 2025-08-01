@@ -140,7 +140,7 @@ async def init_db_pool():
             nome TEXT
         );
         
-       CREATE TABLE ganhadores_bloqueados (
+       CREATE TABLE IF NOT EXISTS ganhadores_bloqueados (
             user_id BIGINT PRIMARY KEY,
             bloqueado_em TIMESTAMP DEFAULT NOW()
         );
@@ -1434,8 +1434,7 @@ async def rem_admin_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-PAGE_SIZE_LISTAR = 50
-
+PAGE_SIZE_LISTAR = 5
 
 async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -2293,6 +2292,7 @@ async def main():
     app.add_handler(CommandHandler('rank_tops', ranking_tops))
     app.add_handler(CommandHandler("historico_usuario", historico_usuario, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("listar_usuarios", listar_usuarios, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CallbackQueryHandler(callback_listar_usuarios,pattern=r'^usuarios\|\d+$'))
     app.add_handler(CommandHandler("listar_via_start", listar_via_start, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("estatisticas", estatisticas, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('como_ganhar', como_ganhar, filters=filters.ChatType.PRIVATE))
