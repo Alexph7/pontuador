@@ -80,11 +80,11 @@ if admin_ids_env:
 logger.info(f"🛡️ Admins carregados da configuração: {ADMINS}")
 
 NIVEIS_BRINDES = {
-    200: "🎁 Brinde nível 1",
-    300: "🎁 Brinde nível 2",
-    500: "🎁 Brinde nível 3",
-    750: "🎁 Brinde nível 4",
-    1000: "🎁 Brinde nível 5"
+    200: ("🎁 Brinde nível 1", 15),   # = 15 créditos
+    300: ("🎁 Brinde nível 2", 25),   # = 25 créditos
+    500: ("🎁 Brinde nível 3", 40),   # = 40 créditos
+    750: ("🎁 Brinde nível 4", 70),   # = 70 créditos
+    1000:("🎁 Brinde nível 5", 100)   # = 100 créditos
 }
 
 # Estados da conversa
@@ -366,6 +366,7 @@ async def setup_commands(app):
         # 2) Comandos em chat privado (com suporte)
         comandos_privados = comandos_basicos + [
             BotCommand("inicio", "Volte ao começo"),
+            BotCommand("resgatar", "Resgate seu brinde"),
             BotCommand("historico", "Mostrar seu histórico"),
             BotCommand("list_pontuadores", "listar usuarios acima de 100 pontos"),
             BotCommand("como_ganhar", "Como ganhar pontos"),
@@ -386,6 +387,7 @@ COMANDOS_PUBLICOS = [
     ("/meus_pontos", "Ver sua pontuação e nível"),
     ("/historico", "Mostrar seu histórico de pontos"),
     ("/rank_tops", "Ranking usuários por pontos"),
+    ("/list_pontuadores", "Todos pontuadores a partir de 100pts"),
     ("/como_ganhar", "Como ganhar mais pontos"),
     ("/news", "Ver Novas Atualizações"),
 ]
@@ -2221,6 +2223,159 @@ async def callback_listar_ranking(update: Update, context: ContextTypes.DEFAULT_
     await listar_ranking(update, context)
 
 
+DIGITANDO_PIX = 1
+ADMIN_CHANNEL_ID = -1002681288915  # coloque aqui o chat_id do canal/admin
+
+async def resgatar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id
+
+    # 1️⃣ Se for chat privado, valida perfil completo (start feito) ⬅️
+    if update.effective_chat.type == "private":
+        invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
+        if invalido:
+            await update.message.reply_text(msg)
+            return
+
+    # 2️⃣ Verifica inscrição no canal ⬅️
+    ok, msg = await verificar_canal(user_id, context.bot)
+    if not ok:
+        await update.message.reply_text(msg)
+        return
+
+    try:
+        # 3️⃣ (Opcional) Garante que exista usuário e processa check-in ⬅️
+        perfil = await obter_ou_criar_usuario_db(
+            user_id=user_id,
+            username=user.username or "vazio",
+            first_name=user.first_name or "vazio",
+            last_name=user.last_name or "vazio",
+            via_start=False
+        )
+        await processar_presenca_diaria(perfil, context.bot)
+
+        # 4️⃣ Busca pontos atuais ⬅️
+        pontos = await pool.fetchval(
+            "SELECT pontos FROM usuarios WHERE user_id = $1",
+            user_id
+        )
+
+        # 5️⃣ Determina qual brinde (faixa) atingiu ⬅️
+        validos = [n for n in NIVEIS_BRINDES.keys() if n <= pontos]
+        if not validos:
+            mínimo = min(NIVEIS_BRINDES.keys())
+            await update.message.reply_text(
+                f"Você terminou com {pontos} pontos; o mínimo para resgate é {mínimo} pontos.\n"
+            )
+            return
+
+        nivel = max(validos)
+        premio, creditos = NIVEIS_BRINDES[nivel]
+
+        # 6️⃣ Envia mensagem de escolha de resgate ⬅️
+        texto = (
+            f"🎉 Parabéns! 🎉 Você terminou com {pontos} pontos e ganhou **{creditos} créditos** \n"
+            f" ({premio}).\n"
+            "1 crédito = 1 real em compras.\n\n"
+            "🛍 Você pode enviar o código de pagamento da compra agora, \n\n ou guardar na carteira e utilizar depois. \n\n"
+        )
+        await update.message.reply_text(
+            texto,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("📥 Enviar código", callback_data="resgatar_codigo"),
+                InlineKeyboardButton("💰 Enviar carteira", callback_data="resgatar_carteira"),
+            ]])
+        )
+        return DIGITANDO_PIX
+
+    except Exception as e:
+        logger.error(f"Erro no /resgatar para user_id={user_id}: {e}", exc_info=True)
+    await update.message.reply_text(
+        "❌ Desculpe, ocorreu um erro ao processar seu resgate. "
+        "Tente novamente mais tarde ou contate o suporte."
+    )
+
+# ─── Novo handler para “Enviar código” ───
+async def iniciar_resgatar_codigo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_text(
+        "✅ Perfeito! Agora envie o código da sua compra, pode ser o código pix da compra ou código de barras."
+    )
+    return DIGITANDO_PIX
+
+# ─── Novo handler para “Enviar para carteira” ───
+async def iniciar_resgatar_carteira(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    # Aqui você pode chamar o outro mét odo ou enviar instruções
+    await update.callback_query.edit_message_text(
+        "OK! Seus créditos foram movidos para sua carteira. Para usar depois, "
+        "digite /wallet quando quiser resgatar."
+    )
+    return ConversationHandler.END
+
+# ─── Registre estes callbacks no seu main() ───
+
+async def receber_codigo_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    # ⬇️ Declaração e lógica de display name ⬇️
+    if user.username:
+        display = user.username
+    elif user.first_name:
+        display = user.first_name
+    elif user.last_name:
+        display = user.last_name
+    else:
+        display = "sem nome"
+
+    codigo = update.message.text.strip()
+
+    # ▶️ Validação: só dígitos e tamanho ≥ 34
+    if len(codigo) < 34:
+        await update.message.reply_text(
+            "❌ O código não parece válido. Certifique-se de que seja um código de pagamento de uma compra"
+        )
+        return DIGITANDO_PIX  # ⬅️ permanece aguardando
+
+    # ▶️ Se válido, encaminha ao canal de admins
+    await context.bot.send_message(
+        chat_id=ADMIN_CHANNEL_ID,
+        text=(
+            f"📥 *Novo código para pagamento de créditos*\n"
+            f"*Usuário:* `{user.id}` — {display}\n"    # ← aqui usamos o display
+            f"*Código:* `{codigo}`"
+        ),
+        parse_mode="Markdown"
+    )
+    await update.message.reply_text(
+        "✅ Código recebido! Seu pedido foi enviado ao time de admins. "
+        "Em breve você receberá a confirmação do pagamento."
+    )
+    return ConversationHandler.END  # ⬅️ encerra o fluxo
+
+# 3) Fallback (caso queira cancelar)
+async def cancelar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Resgate cancelado.")
+    return ConversationHandler.END
+
+# 4) Registre o ConversationHandler no seu setup:
+conv_resgate = ConversationHandler(
+    entry_points=[CommandHandler("resgatar", resgatar, filters=filters.ChatType.PRIVATE)],
+    states={
+        # 1º estado: usuário escolhe enviar código ou enviar pra carteira
+        DIGITANDO_PIX - 1: [
+            CallbackQueryHandler(iniciar_resgatar_codigo, pattern="^resgatar_codigo$"),
+            CallbackQueryHandler(iniciar_resgatar_carteira, pattern="^resgatar_carteira$")
+        ],
+        DIGITANDO_PIX: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, receber_codigo_pix)
+        ]
+    },
+    fallbacks=[CommandHandler("cancelar", cancelar_pix)],
+    per_message=False,
+)
+
+
 async def on_startup(app):
     global ADMINS
 
@@ -2315,7 +2470,7 @@ async def main():
     )
 
     app.add_handler(main_conv)
-
+    app.add_handler(conv_resgate)
     app.add_handler(
         ConversationHandler(
             entry_points=[CommandHandler("start", start, filters=filters.ChatType.PRIVATE)],
@@ -2386,7 +2541,8 @@ async def main():
     app.add_handler(CommandHandler("list_ganhadores_sort", list_ganhadores_sort))
     app.add_handler(CommandHandler("list_pontuadores",listar_ranking,filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(callback_listar_ranking,pattern=r"^ranking\|\d+$"))
-
+    app.add_handler(CallbackQueryHandler(iniciar_resgatar_codigo, pattern=r"^resgatar_codigo$"))
+    app.add_handler(CallbackQueryHandler(iniciar_resgatar_carteira, pattern=r"^resgatar_carteira$"))
     # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
 
