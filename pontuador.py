@@ -2300,7 +2300,7 @@ async def resgatar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def iniciar_resgatar_codigo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     await update.callback_query.edit_message_text(
-        "✅ Perfeito! Agora envie o código da sua compra, pode ser o código pix da compra ou código de barras."
+        "✅ Perfeito! Agora envie o código da sua compra, certifique-se de estar dentro do valor, pode ser o código pix da compra ou código de barras."
     )
     return DIGITANDO_PIX
 
@@ -2348,7 +2348,7 @@ async def receber_codigo_pix(update: Update, context: ContextTypes.DEFAULT_TYPE)
         parse_mode="Markdown"
     )
     await update.message.reply_text(
-        "✅ Código recebido! Seu pedido foi enviado ao time de admins. "
+        "✅ Código recebido! Seu pedido foi enviado para analise e pagamento. "
         "Em breve você receberá a confirmação do pagamento."
     )
     return ConversationHandler.END  # ⬅️ encerra o fluxo
