@@ -130,6 +130,19 @@ async def init_db_pool():
             valor TEXT NOT NULL   -- valor é true para pontuar por checkin e false pra nao pontuar
         );
 
+       -- Cria tabela que registra o envio para carteira (sem alterar usuarios):
+       CREATE TABLE IF NOT EXISTS envios_carteira (
+            user_id      BIGINT PRIMARY KEY,
+            enviado_em   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+       -- Cria tabela de carteiras
+       CREATE TABLE IF NOT EXISTS wallet (
+            user_id    BIGINT PRIMARY KEY,
+            saldo      INTEGER NOT NULL DEFAULT 0,
+            atualizado TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
        CREATE TABLE IF NOT EXISTS admins (
             user_id BIGINT PRIMARY KEY
         );
@@ -351,7 +364,7 @@ async def verificar_canal(user_id: int, bot: Bot) -> tuple[bool, str]:
 async def setup_commands(app):
     try:
         comandos_basicos = [
-            BotCommand("meus_pontos", "Sua pontuação e nível"),
+            #BotCommand("meus_pontos", "Sua pontuação e nível"),
             BotCommand("rank_tops", "Ranking pontuadores"),
             #BotCommand("sortear", "Sortear")
 
@@ -367,8 +380,9 @@ async def setup_commands(app):
         comandos_privados = comandos_basicos + [
             BotCommand("inicio", "Volte ao começo"),
             BotCommand("resgatar", "Resgate seu brinde"),
+            BotCommand("wallet", "Carteira"),
             BotCommand("historico", "Mostrar seu histórico"),
-            BotCommand("list_pontuadores", "listar usuarios acima de 100 pontos"),
+            BotCommand("list_pontuadores", "listar usuarios a partir de 200 pontos"),
             BotCommand("como_ganhar", "Como ganhar pontos"),
             BotCommand("news", "Ver Atualizações"),
         ]
@@ -385,6 +399,8 @@ async def setup_commands(app):
 
 COMANDOS_PUBLICOS = [
     ("/meus_pontos", "Ver sua pontuação e nível"),
+    ("/resgatar", "Resgate seu brinde"),
+    ("/wallet", "Carteira"),
     ("/historico", "Mostrar seu histórico de pontos"),
     ("/rank_tops", "Ranking usuários por pontos"),
     ("/list_pontuadores", "Todos pontuadores a partir de 100pts"),
@@ -2139,7 +2155,7 @@ async def list_ganhadores_sort(update: Update, context: ContextTypes.DEFAULT_TYP
 # Quantos itens por página
 PAGE_SIZE_RANKING = 50
 
-async def listar_ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def listar_pontuadores(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1) Determina a página (default = 1)
     args = context.args or []
     try:
@@ -2150,10 +2166,10 @@ async def listar_ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if page < 1:
         page = 1
 
-    # 2) Conta só quem tem ≥100 pontos ➡️
+    # 2) Conta só quem tem ≥X pontos ➡️
     total_usuarios = await pool.fetchval(
         "SELECT COUNT(*) FROM usuarios WHERE pontos >= $1",
-        100
+        200
     )
     total_paginas = max(1, math.ceil(total_usuarios / PAGE_SIZE_RANKING))
     if page > total_paginas:
@@ -2220,9 +2236,9 @@ async def callback_listar_ranking(update: Update, context: ContextTypes.DEFAULT_
     # Extrai a nova página de "ranking|<n>"
     _, nova_pagina = update.callback_query.data.split("|")
     context.args = [nova_pagina]
-    await listar_ranking(update, context)
+    await listar_pontuadores(update, context)
 
-
+ESCOLHENDO_RESGATE = 0
 DIGITANDO_PIX = 1
 ADMIN_CHANNEL_ID = -1002681288915  # coloque aqui o chat_id do canal/admin
 
@@ -2254,6 +2270,16 @@ async def resgatar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await processar_presenca_diaria(perfil, context.bot)
 
+        existe_na_wallet = await pool.fetchval(
+            "SELECT 1 FROM wallet WHERE user_id = $1",
+            user_id
+        )
+        if existe_na_wallet:
+            await update.message.reply_text(
+                "⚠️ Você já enviou seus créditos para a carteira e não pode resgatar de novo. acesse /wallet pra ver seu saldo"
+            )
+            return
+
         # 4️⃣ Busca pontos atuais ⬅️
         pontos = await pool.fetchval(
             "SELECT pontos FROM usuarios WHERE user_id = $1",
@@ -2277,7 +2303,7 @@ async def resgatar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🎉 Parabéns! 🎉 Você terminou com {pontos} pontos e ganhou **{creditos} créditos** \n"
             f" ({premio}).\n"
             "1 crédito = 1 real em compras.\n\n"
-            "🛍 Você pode enviar o código de pagamento da compra agora, \n\n ou guardar na carteira e utilizar depois. \n\n"
+            "🛍 Você pode enviar o código de pagamento da compra agora \nou guardar na carteira e utilizar depois. \n\n"
         )
         await update.message.reply_text(
             texto,
@@ -2287,7 +2313,7 @@ async def resgatar(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("💰 Enviar carteira", callback_data="resgatar_carteira"),
             ]])
         )
-        return DIGITANDO_PIX
+        return ESCOLHENDO_RESGATE
 
     except Exception as e:
         logger.error(f"Erro no /resgatar para user_id={user_id}: {e}", exc_info=True)
@@ -2308,9 +2334,10 @@ async def iniciar_resgatar_codigo(update: Update, context: ContextTypes.DEFAULT_
 async def iniciar_resgatar_carteira(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     # Aqui você pode chamar o outro mét odo ou enviar instruções
+    await enviar_carteira(update, context)
     await update.callback_query.edit_message_text(
-        "OK! Seus créditos foram movidos para sua carteira. Para usar depois, "
-        "digite /wallet quando quiser resgatar."
+        "✅ Seus créditos foram movidos para sua carteira. Para usar depois, "
+        "digite /wallet."
     )
     return ConversationHandler.END
 
@@ -2363,7 +2390,7 @@ conv_resgate = ConversationHandler(
     entry_points=[CommandHandler("resgatar", resgatar, filters=filters.ChatType.PRIVATE)],
     states={
         # 1º estado: usuário escolhe enviar código ou enviar pra carteira
-        DIGITANDO_PIX - 1: [
+        ESCOLHENDO_RESGATE: [
             CallbackQueryHandler(iniciar_resgatar_codigo, pattern="^resgatar_codigo$"),
             CallbackQueryHandler(iniciar_resgatar_carteira, pattern="^resgatar_carteira$")
         ],
@@ -2374,6 +2401,98 @@ conv_resgate = ConversationHandler(
     fallbacks=[CommandHandler("cancelar", cancelar_pix)],
     per_message=False,
 )
+
+async def enviar_carteira(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if update.callback_query:
+        target = update.callback_query.message
+    else:
+        target = update.message
+
+        # 1️⃣ Valida perfil e canal (mesma lógica de /resgatar)
+    if update.effective_chat.type == "private":
+        invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
+        if invalido:
+            await target.reply_text(msg)
+            return
+    ok, msg = await verificar_canal(user_id, context.bot)
+    if not ok:
+        await target.reply_text(msg)
+        return
+
+    # 2️⃣ Verifica se já existe registro em wallet ➡️ (antes: envios_carteira)
+    existente = await pool.fetchval(
+        "SELECT 1 FROM wallet WHERE user_id = $1",  # ← tabela trocada aqui
+        user_id
+    )
+    if existente:
+        await target.reply_text(
+            "⚠️ Você já enviou seus créditos para a carteira e não pode reenviar."
+        )
+        return
+
+    # 3️⃣ Busca pontos atuais ➡️
+    pontos = await pool.fetchval(
+        "SELECT pontos FROM usuarios WHERE user_id = $1",
+        user_id
+    )
+
+    # 4️⃣ Insere o registro de envio em wallet ➡️ (antes: envios_carteira)
+    await pool.execute(
+        "INSERT INTO wallet (user_id, saldo) VALUES ($1, $2)",  # ← usa wallet e já grava o saldo
+        user_id, pontos
+    )
+
+    await pool.execute(
+        "UPDATE usuarios SET pontos = 0 WHERE user_id = $1",
+        user_id
+    )
+
+    # 5️⃣ Confirma para o usuário
+    await target.reply_text(
+        f"💰 Seus {pontos} créditos foram movidos para sua carteira!\n"
+    )
+
+
+# ─── Comando /wallet ───
+async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    # 1️⃣ Validação de perfil e canal (mesma de /resgatar e /enviar_carteira)
+    if update.effective_chat.type == "private":
+        invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
+        if invalido:
+            await update.message.reply_text(msg)
+            return
+    ok, msg = await verificar_canal(user_id, context.bot)
+    if not ok:
+        await update.message.reply_text(msg)
+        return
+
+    # 2️⃣ Busca o saldo na wallet
+    row = await pool.fetchrow(
+        "SELECT saldo, atualizado FROM wallet WHERE user_id = $1",
+        user_id
+    )
+    # ⬇️ Se não existir registro ou saldo zero:
+    if not row or row["saldo"] <= 0:
+        await update.message.reply_text(
+            "💳 Seu saldo na carteira é 0 créditos. "
+            "Use /resgatar para ganhar mais créditos."
+        )
+        return
+
+    saldo = row["saldo"]
+    atualizado = row["atualizado"]
+
+    # 3️⃣ Exibe o saldo e a última atualização
+    await update.message.reply_text(
+        f"💳 **Sua carteira**\n\n"
+        f"Saldo disponível: **{saldo} créditos**\n"
+        f"Atualizado em: `{atualizado}`",
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 
 async def on_startup(app):
@@ -2539,12 +2658,14 @@ async def main():
     app.add_handler(CommandHandler("cancelar_sort", cancelar_sort))
     app.add_handler(CommandHandler("liberar_ganhadores", liberar_ganhadores, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("list_ganhadores_sort", list_ganhadores_sort))
-    app.add_handler(CommandHandler("list_pontuadores",listar_ranking,filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("list_pontuadores", listar_pontuadores, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(callback_listar_ranking,pattern=r"^ranking\|\d+$"))
     app.add_handler(CallbackQueryHandler(iniciar_resgatar_codigo, pattern=r"^resgatar_codigo$"))
     app.add_handler(CallbackQueryHandler(iniciar_resgatar_carteira, pattern=r"^resgatar_carteira$"))
     # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
+    app.add_handler(CommandHandler("enviar_carteira", enviar_carteira, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("wallet", wallet, filters=filters.ChatType.PRIVATE))
 
     logger.info("🔄 Iniciando polling...")
     await app.run_polling()
