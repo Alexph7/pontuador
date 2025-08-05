@@ -1,4 +1,5 @@
 import os
+import json
 import re
 import sys
 from random import random
@@ -28,10 +29,8 @@ from telegram.ext import (
 def hoje_data_sp():
     return datetime.now(tz=ZoneInfo("America/Sao_Paulo")).date()
 
-
 def hoje_hora_sp():
     return datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
-
 
 def format_dt_sp(dt: datetime | None, fmt: str = "%d/%m/%Y %H:%M:%S") -> str:
     """
@@ -139,12 +138,30 @@ async def init_db_pool():
        -- Cria tabela de carteiras
        CREATE TABLE IF NOT EXISTS wallet (
             user_id    BIGINT PRIMARY KEY,
-            saldo      INTEGER NOT NULL DEFAULT 0,
+            username   TEXT NOT NULL DEFAULT 'vazio',
+            first_name TEXT NOT NULL DEFAULT 'vazio',
+            last_name  TEXT NOT NULL DEFAULT 'vazio',
+            saldo      numeric(12,2) NOT NULL DEFAULT 0,
             atualizado TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
 
+
        CREATE TABLE IF NOT EXISTS admins (
             user_id BIGINT PRIMARY KEY
+        );
+
+       CREATE TABLE IF NOT EXISTS wallet_historico_user (
+            id          SERIAL PRIMARY KEY,
+            user_id     BIGINT NOT NULL,
+            valor       INTEGER NOT NULL,
+            tipo        TEXT NOT NULL CHECK (tipo IN ('credito', 'debito')),
+            descricao   TEXT NOT NULL,
+            criado_em   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        
+            -- duplicação leve de nome pra exibir no admin se quiser
+            username    TEXT NOT NULL DEFAULT 'vazio',
+            first_name  TEXT NOT NULL DEFAULT 'vazio',
+            last_name   TEXT NOT NULL DEFAULT 'vazio'
         );
 
        -- tabela de canais para uso em sorteio_config
@@ -158,7 +175,21 @@ async def init_db_pool():
             bloqueado_em TIMESTAMP DEFAULT NOW()
         );
 
-                               
+       CREATE TABLE IF NOT EXISTS movimentacoes_globais (
+            id          SERIAL PRIMARY KEY,
+            usuario_id  BIGINT       NOT NULL,
+            evento      TEXT         NOT NULL,
+            detalhes    JSONB        NOT NULL DEFAULT '{}' ,
+            criado_em   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        );
+
+       CREATE TABLE IF NOT EXISTS fila_pagamento (
+            id          SERIAL PRIMARY KEY,
+            user_id     BIGINT    NOT NULL,
+            code        TEXT      NOT NULL,
+            created_em  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
        CREATE TABLE IF NOT EXISTS sorteio_config (
             id                          SERIAL PRIMARY KEY,
             canal_id                    BIGINT REFERENCES canais(id) ON DELETE SET NULL,
@@ -381,8 +412,8 @@ async def setup_commands(app):
             BotCommand("inicio", "Volte ao começo"),
             BotCommand("resgatar", "Resgate seu brinde"),
             BotCommand("wallet", "Carteira"),
-            BotCommand("historico", "Mostrar seu histórico"),
-            BotCommand("list_pontuadores", "listar usuarios a partir de 200 pontos"),
+            # BotCommand("historico", "Mostrar seu histórico"),
+            # BotCommand("list_pontuadores", "listar usuarios a partir de 200 pontos"),
             BotCommand("como_ganhar", "Como ganhar pontos"),
             BotCommand("news", "Ver Atualizações"),
         ]
@@ -401,9 +432,9 @@ COMANDOS_PUBLICOS = [
     ("/meus_pontos", "Ver sua pontuação e nível"),
     ("/resgatar", "Resgate seu brinde"),
     ("/wallet", "Carteira"),
-    ("/historico", "Mostrar seu histórico de pontos"),
+    # ("/historico", "Mostrar seu histórico de pontos"),
     ("/rank_tops", "Ranking usuários por pontos"),
-    ("/list_pontuadores", "Todos pontuadores a partir de 100pts"),
+    # ("/list_pontuadores", "Todos pontuadores a partir de 100pts"),
     ("/como_ganhar", "Como ganhar mais pontos"),
     ("/news", "Ver Novas Atualizações"),
 ]
@@ -434,6 +465,8 @@ ADMIN_MENU = (
     "🔧 *Menu Admin* 🔧\n\n"
     "/add - atribuir pontos usuário\n"
     "/del – remover pontos de usuário\n"
+    "/timeline – todas movimentações de carteiras\n"
+    "/pay – pagar compra\n"
     "/historico_usuario – historico de nomes de usuario\n"
     "/rem – remover admin\n"
     "/listar_usuarios – lista de usuarios cadastrados\n"
@@ -639,11 +672,10 @@ async def perfil_invalido_ou_nao_inscrito(user_id: int, bot: Bot) -> tuple[bool,
         user_id
     )
 
-    if not perfil:
-        return True, "⚠️ Você ainda não está cadastrado. Use /start para configurar seu perfil."
-
-    if perfil["display_choice"] == "indefinido":
-        return True, "⚠️ Seu perfil está incompleto. Use /start para configurá-lo corretamente."
+    if not perfil or perfil["display_choice"] == "indefinido":
+        return True, (
+            "⚠️ Você precisa interagir do início. Use /start."
+        )
 
     return False, ""  # está tudo OK
 
@@ -758,13 +790,8 @@ async def meus_pontos(update: Update, context: CallbackContext):
             "SELECT COUNT(*) + 1 FROM usuarios WHERE pontos > $1",
             pontos
         )
-        if nivel == 0:
-            nivel_texto = "Rumo ao nível 1"
-        else:
-            nivel_texto = f"Eba! Já alcançou brinde de Nível {nivel}"
-
         await update.message.reply_text(
-            f"🎉 Você tem {pontos} pontos. {nivel_texto} 🏅 {posicao}º lugar."
+            f"🎉 Você tem {pontos} pontos.🏅 {posicao}º lugar."
         )
 
     except Exception as e:
@@ -916,23 +943,23 @@ async def del_pontos_quantidade(update: Update, context: ContextTypes.DEFAULT_TY
     return DEL_PONTOS_MOTIVO
 
 
-async def del_pontos_motivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    motivo = update.message.text.strip()
-    if not motivo:
-        return await update.message.reply_text("❗️ Motivo obrigatório. Digite um texto.")
-
-    alvo_id = context.user_data.pop("del_pt_id")
-    pontos = context.user_data.pop("del_pt_value")
-    motivo = update.message.text.strip()
-
-    novo_total = await atualizar_pontos(alvo_id, -pontos, f"(removido) {motivo}", context.bot)
-
-    await update.message.reply_text(
-        f"✅ {pontos} pts removidos de {alvo_id}.\n"
-        f"Motivo: {motivo}\n"
-        f"Total agora: {novo_total} pts."
-    )
-    return ConversationHandler.END
+# async def del_pontos_motivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     motivo = update.message.text.strip()
+#     if not motivo:
+#         return await update.message.reply_text("❗️ Motivo obrigatório. Digite um texto.")
+#
+#     alvo_id = context.user_data.pop("del_pt_id")
+#     pontos = context.user_data.pop("del_pt_value")
+#     motivo = update.message.text.strip()
+#
+#     novo_total = await atualizar_pontos(alvo_id, -pontos, f"(removido) {motivo}", context.bot)
+#
+#     await update.message.reply_text(
+#         f"✅ {pontos} pts removidos de {alvo_id}.\n"
+#         f"Motivo: {motivo}\n"
+#         f"Total agora: {novo_total} pts."
+#     )
+#     return ConversationHandler.END
 
 
 async def atualizar_pontos(
@@ -978,38 +1005,38 @@ async def atualizar_pontos(
     logger.info(f"[atualizar_pontos] Pontos atualizados no banco para user_id={user_id}")
     return novos
 
-
-async def historico(update: Update, context: CallbackContext):
-    user = update.effective_user
-    user_id = user.id
-    chat_type = update.effective_chat.type
-
-    if chat_type == "private":
-        invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
-        if invalido:
-            await update.message.reply_text(msg)
-            return
-    rows = await pool.fetch(
-        """
-        SELECT data, pontos, motivo
-          FROM historico_pontos
-         WHERE user_id = $1
-      ORDER BY data DESC
-         LIMIT 50
-        """,
-        user_id
-    )
-
-    if not rows:
-        await update.message.reply_text("🗒️ Nenhum registro de histórico encontrado.")
-        return
-
-    lines = [
-        f" {format_dt_sp(r['data'], '%d/%m %H:%M')}: {r['pontos']} pts - {r['motivo']}"
-        for r in rows
-    ]
-    await update.message.reply_text("🗒️ Seu histórico de pontos:\n\n" + "\n\n".join(lines))
-
+#
+# async def historico(update: Update, context: CallbackContext):
+#     user = update.effective_user
+#     user_id = user.id
+#     chat_type = update.effective_chat.type
+#
+#     if chat_type == "private":
+#         invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
+#         if invalido:
+#             await update.message.reply_text(msg)
+#             return
+#     rows = await pool.fetch(
+#         """
+#         SELECT data, pontos, motivo
+#           FROM historico_pontos
+#          WHERE user_id = $1
+#       ORDER BY data DESC
+#          LIMIT 50
+#         """,
+#         user_id
+#     )
+#
+#     if not rows:
+#         await update.message.reply_text("🗒️ Nenhum registro de histórico encontrado.")
+#         return
+#
+#     lines = [
+#         f" {format_dt_sp(r['data'], '%d/%m %H:%M')}: {r['pontos']} pts - {r['motivo']}"
+#         for r in rows
+#     ]
+#     await update.message.reply_text("🗒️ Seu histórico de pontos:\n\n" + "\n\n".join(lines))
+#
 
 async def ranking_tops(update: Update, context: CallbackContext):
     user = update.effective_user
@@ -1447,7 +1474,7 @@ async def rem_admin_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-PAGE_SIZE_LISTAR = 5
+PAGE_SIZE_LISTAR = 25
 
 async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1577,10 +1604,6 @@ async def callback_listar_usuarios(update: Update, context: ContextTypes.DEFAULT
     context.args = [str(nova_pagina)]
     # Reaproveita a mesma função para editar a mensagem
     await listar_usuarios(update, context)
-
-
-from telegram import Update
-from telegram.ext import ContextTypes
 
 
 async def estatisticas(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2240,6 +2263,9 @@ async def callback_listar_ranking(update: Update, context: ContextTypes.DEFAULT_
 
 ESCOLHENDO_RESGATE = 0
 DIGITANDO_PIX = 1
+DIGITANDO_WALLET = 2
+CONFIRMANDO_CODIGO   = 3
+
 ADMIN_CHANNEL_ID = -1002681288915  # coloque aqui o chat_id do canal/admin
 
 async def resgatar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2325,9 +2351,15 @@ async def resgatar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Novo handler para “Enviar código” ───
 async def iniciar_resgatar_codigo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
-    await update.callback_query.edit_message_text(
-        "✅ Perfeito! Agora envie o código da sua compra, certifique-se de estar dentro do valor, pode ser o código pix da compra ou código de barras."
-    )
+
+    # só permite envio de código se tiver ≥1 crédito na carteira
+    user_id = update.effective_user.id
+    saldo = await pool.fetchval("SELECT saldo FROM wallet WHERE user_id = $1", user_id) or 0
+    if saldo < 1:
+        await update.callback_query.edit_message_text("❌ Créditos insuficientes para usar agora. Você pode mover para a carteira e acumular mais.")
+        return ConversationHandler.END
+
+    await update.callback_query.edit_message_text("✅ Perfeito! Agora envie o código da sua compra...")
     return DIGITANDO_PIX
 
 # ─── Novo handler para “Enviar para carteira” ───
@@ -2362,23 +2394,53 @@ async def receber_codigo_pix(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(
             "❌ O código não parece válido. Certifique-se de que seja um código de pagamento de uma compra"
         )
-        return DIGITANDO_PIX  # ⬅️ permanece aguardando
+        return DIGITANDO_WALLET if context.user_data.get("fluxo") == "wallet" else DIGITANDO_PIX
 
-    # ▶️ Se válido, encaminha ao canal de admins
+    context.user_data["codigo_enviado"] = codigo
+    context.user_data["display"] = display
+
+    await update.message.reply_text(
+        "⚠️Atenção, confira se o valor não ultrapassa a carteira, confirme o envio do código abaixo:\n\n"
+        f"`{codigo}`",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Confirmar", callback_data="confirmar_codigo")],
+            [InlineKeyboardButton("❌ Cancelar", callback_data="cancelar_codigo")]
+        ])
+    )
+    return CONFIRMANDO_CODIGO
+
+async def confirmar_codigo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    user = update.effective_user
+
+    codigo = context.user_data.get("codigo_enviado")
+    display = context.user_data.get("display") or "sem nome"
+
+    if not codigo:
+        await update.callback_query.edit_message_text("❌ Nenhum código para confirmar.")
+        return ConversationHandler.END
+
+    titulo = "📥 *Uso de carteira*" if context.user_data.get("fluxo") == "wallet" else "📥 *Novo código para pagamento de créditos*"
+
     await context.bot.send_message(
         chat_id=ADMIN_CHANNEL_ID,
         text=(
-            f"📥 *Novo código para pagamento de créditos*\n"
-            f"*Usuário:* `{user.id}` — {display}\n"    # ← aqui usamos o display
+            f"{titulo}\n"
+            f"*Usuário:* `{user.id}` — {display}\n"
             f"*Código:* `{codigo}`"
         ),
         parse_mode="Markdown"
     )
-    await update.message.reply_text(
-        "✅ Código recebido! Seu pedido foi enviado para analise e pagamento. "
-        "Em breve você receberá a confirmação do pagamento."
-    )
-    return ConversationHandler.END  # ⬅️ encerra o fluxo
+
+    await update.callback_query.edit_message_text("✅ Código enviado com sucesso. Aguarde confirmação de pagamento.")
+    return ConversationHandler.END
+
+async def cancelar_codigo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_text("❌ Envio cancelado.")
+    return ConversationHandler.END
+
 
 # 3) Fallback (caso queira cancelar)
 async def cancelar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2403,14 +2465,15 @@ conv_resgate = ConversationHandler(
 )
 
 async def enviar_carteira(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    user = update.effective_user
+    user_id = user.id
 
     if update.callback_query:
         target = update.callback_query.message
     else:
         target = update.message
 
-        # 1️⃣ Valida perfil e canal (mesma lógica de /resgatar)
+    # 1️⃣ Valida perfil e canal
     if update.effective_chat.type == "private":
         invalido, msg = await perfil_invalido_ou_nao_inscrito(user_id, context.bot)
         if invalido:
@@ -2421,41 +2484,57 @@ async def enviar_carteira(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await target.reply_text(msg)
         return
 
-    # 2️⃣ Verifica se já existe registro em wallet ➡️ (antes: envios_carteira)
+    # 2️⃣ Verifica se já existe registro
     existente = await pool.fetchval(
-        "SELECT 1 FROM wallet WHERE user_id = $1",  # ← tabela trocada aqui
+        "SELECT 1 FROM wallet WHERE user_id = $1",
         user_id
     )
     if existente:
-        await target.reply_text(
-            "⚠️ Você já enviou seus créditos para a carteira e não pode reenviar."
-        )
+        await target.reply_text("⚠️ Você já enviou seus créditos para a carteira e não pode reenviar.")
         return
 
-    # 3️⃣ Busca pontos atuais ➡️
+    # 3️⃣ Busca pontos e calcula créditos
     pontos = await pool.fetchval(
         "SELECT pontos FROM usuarios WHERE user_id = $1",
         user_id
     )
+    validos = [n for n in NIVEIS_BRINDES.keys() if n <= pontos]
+    nivel = max(validos) if validos else 0
+    _, creditos = NIVEIS_BRINDES.get(nivel, ("", 0))
 
-    # 4️⃣ Insere o registro de envio em wallet ➡️ (antes: envios_carteira)
+    # 4️⃣ Insere na wallet
     await pool.execute(
-        "INSERT INTO wallet (user_id, saldo) VALUES ($1, $2)",  # ← usa wallet e já grava o saldo
-        user_id, pontos
+        "INSERT INTO wallet (user_id, saldo) VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING",
+        user_id, creditos
     )
+    await pool.execute("UPDATE usuarios SET pontos = 0 WHERE user_id = $1", user_id)
 
+    # 5️⃣ Histórico pessoal
     await pool.execute(
-        "UPDATE usuarios SET pontos = 0 WHERE user_id = $1",
-        user_id
+        """
+        INSERT INTO wallet_historico_user
+            (user_id, valor, tipo, descricao, username, first_name, last_name)
+        VALUES
+            ($1, $2, 'credito', 'Resgate para carteira', $3, $4, $5)
+        """,
+        user_id,
+        creditos,
+        user.username or 'vazio',
+        user.first_name or 'vazio',
+        user.last_name or 'vazio'
     )
 
-    # 5️⃣ Confirma para o usuário
-    await target.reply_text(
-        f"💰 Seus {pontos} créditos foram movidos para sua carteira!\n"
+    # 6️⃣ Log global
+    await pool.execute(
+        """
+        INSERT INTO movimentacoes_globais (usuario_id, evento, detalhes)
+        VALUES ($1, 'resgate_para_carteira',
+        jsonb_build_object('creditos', $2::int, 'descricao', 'Resgate para carteira'))
+        """,
+        user_id,
+        creditos
     )
 
-
-# ─── Comando /wallet ───
 async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
@@ -2479,20 +2558,304 @@ async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not row or row["saldo"] <= 0:
         await update.message.reply_text(
             "💳 Seu saldo na carteira é 0 créditos. "
-            "Use /resgatar para ganhar mais créditos."
         )
         return
 
     saldo = row["saldo"]
-    atualizado = row["atualizado"]
+    atualizado = format_dt_sp(datetime.now())
 
     # 3️⃣ Exibe o saldo e a última atualização
     await update.message.reply_text(
         f"💳 **Sua carteira**\n\n"
-        f"Saldo disponível: **{saldo} créditos**\n"
-        f"Atualizado em: `{atualizado}`",
-        parse_mode=ParseMode.MARKDOWN
+        f"💰 Saldo disponível: C **{saldo:.2f} créditos**\n"
+        f"🔍 Consultado em: `{atualizado}`",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("💳 Utilizar", callback_data="utilizar_wallet"),
+            InlineKeyboardButton("📜 Histórico", callback_data="ver_historico_wallet"),
+        ]])
     )
+
+# ─── Quando clicar “Utilizar” ───
+async def iniciar_utilizar_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    user_id = update.effective_user.id
+    # Valida saldo mínimo na carteira antes de permitir uso
+    saldo = await pool.fetchval("SELECT saldo FROM wallet WHERE user_id = $1", user_id) or 0
+
+    if saldo < 1:
+        await update.callback_query.edit_message_text(
+            "❌ Créditos insuficientes para utilizar agora. Mínimo de 1 Credito."
+        )
+        return ConversationHandler.END
+
+    context.user_data["fluxo"] = "wallet"
+    await update.callback_query.edit_message_text(
+        "✏️ Por favor, envie o código da sua compra para processar o débito."
+    )
+    return DIGITANDO_WALLET  # passa para o estado de receber o código
+
+# ─── Recebe o código de uso da carteira ───
+async def receber_codigo_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    codigo = update.message.text.strip()
+    # valida apenas tamanho ≥ 5 (ajuste conforme sua regra)
+    if len(codigo) < 5:
+        await update.message.reply_text(
+            "❌ Código muito curto. Certifique-se de enviar o código completo."
+        )
+        return DIGITANDO_WALLET
+
+    # ─── Registra o pedido na fila de pagamento ───
+    await pool.execute(
+        "INSERT INTO fila_pagamento (user_id, code) VALUES ($1, $2)",
+        update.effective_user.id, codigo
+    )
+
+    # encaminha para o canal/admin
+    await context.bot.send_message(
+        chat_id=ADMIN_CHANNEL_ID,
+        text=(
+            f"📥 *Uso de carteira*\n"
+            f"*Usuário:* `{update.effective_user.id}`\n"
+            f"*Código:* `{codigo}`"
+        ),
+        parse_mode="Markdown"
+    )
+    await update.message.reply_text(
+        "✅ Código enviado ao admin para processar o débito."
+    )
+    return ConversationHandler.END
+
+conv_wallet = ConversationHandler(
+    entry_points=[
+        CallbackQueryHandler(iniciar_utilizar_wallet, pattern=r"^utilizar_wallet$")
+    ],
+    states={
+        DIGITANDO_WALLET: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, receber_codigo_wallet)
+        ],
+        CONFIRMANDO_CODIGO: [
+            CallbackQueryHandler(confirmar_codigo, pattern="^confirmar_codigo$"),
+            CallbackQueryHandler(cancelar_codigo, pattern="^cancelar_codigo$")
+        ]
+    },
+    fallbacks=[CommandHandler("cancelar", cancelar_pix)],
+    per_message=False,
+)
+
+
+async def ver_historico_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    user_id = update.effective_user.id
+
+    rows = await pool.fetch(
+        """
+        SELECT valor, criado_em
+          FROM wallet_historico_user
+         WHERE user_id = $1
+         ORDER BY criado_em DESC
+         LIMIT 10
+        """,
+        user_id
+    )
+
+    if not rows:
+        await update.callback_query.edit_message_text("📭 Nenhuma movimentação encontrada.")
+        return
+
+    texto = "💳 *Histórico da Carteira*\n\n"
+    for row in rows:
+        data_fmt = row["criado_em"] \
+            .astimezone(ZoneInfo("America/Sao_Paulo")) \
+            .strftime("%d/%m")
+        valor = row["valor"]
+        if valor > 0:
+            tipo  = "Ganho de"
+            sinal = f"+{valor}"
+        else:
+            tipo  = "Débito de"
+            sinal = f"-{abs(valor)}"
+
+        texto += f"📆 {data_fmt} - {tipo} {sinal} créditos\n"
+
+    await update.callback_query.edit_message_text(
+        texto,
+        parse_mode=ParseMode.MARKDOWN,
+        disable_web_page_preview=True
+    )
+
+
+async def timeline(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Só admins
+    if update.effective_user.id not in ADMINS:
+        return await update.message.reply_text("🚫 Você não tem permissão.")
+
+    rows = await pool.fetch(
+        """
+        SELECT usuario_id, evento, detalhes, criado_em
+          FROM movimentacoes_globais
+         ORDER BY criado_em DESC
+         LIMIT 50
+        """
+    )
+    if not rows:
+        return await update.message.reply_text("🗒️ Sem registros ainda.")
+
+    texto = "🕒 *Linha do Tempo de Atividades* (ultimas 50)\n\n"
+    for r in rows:
+        ts = r["criado_em"].astimezone(ZoneInfo("America/Sao_Paulo"))\
+                            .strftime("%d/%m %H:%M")
+        uid = r["usuario_id"]
+        nome = (
+            r.get("username")
+            or r.get("first_name")
+            or r.get("last_name")
+            or "sem nome"
+        )
+        evt = r["evento"].replace("_", " ").title()
+        det = json.loads(r["detalhes"])   # <-- CONVERTE JSON string para dict
+
+        # Ex: detalhar créditos ou motivo
+        extra = ""
+        if 'creditos' in det:
+            extra = f" — {det['creditos']} créditos"
+        if 'descricao' in det:
+            extra += f" ({det['descricao']})"
+
+        texto += f"📆 `{ts}` — Usuário `{uid}` ({nome}): *{evt}*{extra}\n"
+
+    await update.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN)
+
+
+# estados da conversa
+PAY_CODIGO, PAY_VALOR = range(2)
+
+async def pay_fila(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lista todos os pedidos na fila por ordem de chegada."""
+    rows = await pool.fetch(
+        """
+        SELECT id, user_id, code, created_em
+          FROM fila_pagamento
+         ORDER BY created_em
+        """
+    )
+    if not rows:
+        return await update.message.reply_text("📭 Não há pedidos na fila.")
+    texto = "📋 *Fila de Pagamentos:*\n\n"
+    for r in rows:
+        ts = r["created_em"].astimezone(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m %H:%M")
+        texto += f"• `{r['code']}` — usuário `{r['user_id']}` ({ts})\n"
+    await update.message.reply_text(texto, parse_mode="Markdown")
+    return PAY_CODIGO
+
+
+async def pay_codigo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Recebe o código PIX e identifica o pedido."""
+    pix = update.message.text.strip()
+    req = await pool.fetchrow(
+        "SELECT id, user_id FROM fila_pagamento WHERE code = $1",
+        pix
+    )
+    if not req:
+        await update.message.reply_text("❌ Código não encontrado.")
+        return ConversationHandler.END
+
+    context.user_data["pay_id"] = req["id"]
+    context.user_data["pay_user"] = req["user_id"]
+    context.user_data["pay_code"] = pix
+
+    await update.message.reply_text(
+        f"✅ Pedido `{pix}` selecionado. Digite o *valor pago* (ex: 15.50):",
+        parse_mode="Markdown"
+    )
+    return PAY_VALOR
+
+async def pay_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Recebe valor, verifica saldo, debita, notifica e remove da fila."""
+    text = update.message.text.strip().replace(",", ".")
+    try:
+        valor = float(text)
+    except ValueError:
+        await update.message.reply_text("❌ Valor inválido, ex: 15.50")
+        return PAY_VALOR
+
+    pay_id = context.user_data["pay_id"]
+    user_id = context.user_data["pay_user"]
+
+    # saldo atual
+    saldo = await pool.fetchval(
+        "SELECT saldo FROM wallet WHERE user_id = $1",
+        user_id
+    ) or 0.0
+
+    if valor > saldo:
+        return await update.message.reply_text(
+            f"❌ Saldo insuficiente ({saldo:.2f})."
+        )
+    # debita (cast para numeric(12,2))
+    await pool.execute("UPDATE wallet SET saldo = saldo - $1::numeric(12,2), atualizado = NOW()"
+                       "WHERE user_id = $2",
+                       valor, user_id
+                       )
+
+    # registra débito no histórico (com valor negativo)
+    await pool.execute(
+        """
+        INSERT INTO wallet_historico_user
+            (user_id, valor, tipo, descricao, username, first_name, last_name)
+        SELECT
+            $1,
+            -$2::numeric(12,2),
+            'debito',
+            'Pagamento de resgate',
+            username,
+            first_name,
+            last_name
+        FROM usuarios
+        WHERE user_id = $1
+        """,
+        user_id, valor
+    )
+    # log global com casts para texto e numeric
+    await pool.execute(
+        """
+        INSERT INTO movimentacoes_globais (usuario_id, evento, detalhes)
+        VALUES (
+            $1,
+            'pagamento_compra',
+            jsonb_build_object(
+                'codigo', $2::text,
+                'valor',  $3::numeric(12,2)
+            )
+        )
+        """,
+        user_id, context.user_data["pay_code"], valor
+    )
+    #Remove da fila
+    await pool.execute("DELETE FROM fila_pagamento WHERE id = $1", pay_id)
+
+    # notifica usuário
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=(
+            f"💵 *Tudo Certo, Pagamento Efetuado, confira sua compra!*\n"
+            f"Foi debitado *{valor:.2f} créditos* para o pedido `{context.user_data['pay_code']}`.\n"
+            "Verifique seu saldo em /wallet."
+        ),
+        parse_mode="Markdown"
+    )
+    await update.message.reply_text("✅ Pagamento registrado e pedido removido da fila.")
+    return ConversationHandler.END
+
+conv_pay = ConversationHandler(
+    entry_points=[CommandHandler("pay", pay_fila)],
+    states={
+        PAY_CODIGO: [MessageHandler(filters.TEXT & ~filters.COMMAND, pay_codigo)],
+        PAY_VALOR:  [MessageHandler(filters.TEXT & ~filters.COMMAND, pay_valor)],
+    },
+    fallbacks=[CommandHandler("cancelar", lambda u,c: ConversationHandler.END)],
+    per_message=False,
+)
 
 
 async def on_startup(app):
@@ -2564,11 +2927,10 @@ main_conv = ConversationHandler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, del_pontos_quantidade),
             MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancel),
         ],
-        DEL_PONTOS_MOTIVO: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, del_pontos_motivo),
-            MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancel),
-        ],
-        # # /add_admin → id
+        # DEL_PONTOS_MOTIVO: [
+        #     MessageHandler(filters.TEXT & ~filters.COMMAND, del_pontos_motivo),
+        #     MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancel),
+        # ],
         REM_ADMIN_ID: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, rem_admin_execute),
             MessageHandler(filters.Regex(r'^(cancelar|/cancelar)$'), cancel),
@@ -2590,6 +2952,9 @@ async def main():
 
     app.add_handler(main_conv)
     app.add_handler(conv_resgate)
+    app.add_handler(conv_wallet)
+    app.add_handler(conv_pay)
+
     app.add_handler(
         ConversationHandler(
             entry_points=[CommandHandler("start", start, filters=filters.ChatType.PRIVATE)],
@@ -2636,7 +3001,7 @@ async def main():
     app.add_handler(CommandHandler("inicio", cmd_inicio, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('admin', admin, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('meus_pontos', meus_pontos))
-    app.add_handler(CommandHandler('historico', historico, filters=filters.ChatType.PRIVATE))
+    # app.add_handler(CommandHandler('historico', historico, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(callback_historico, pattern=r"^hist:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(paginacao_via_start, pattern=r"^via_start:\d+$"))
     app.add_handler(CommandHandler("backup", cmd_backup))
@@ -2662,6 +3027,9 @@ async def main():
     app.add_handler(CallbackQueryHandler(callback_listar_ranking,pattern=r"^ranking\|\d+$"))
     app.add_handler(CallbackQueryHandler(iniciar_resgatar_codigo, pattern=r"^resgatar_codigo$"))
     app.add_handler(CallbackQueryHandler(iniciar_resgatar_carteira, pattern=r"^resgatar_carteira$"))
+    app.add_handler(CallbackQueryHandler(ver_historico_wallet, pattern=r"^ver_historico_wallet$"))
+    app.add_handler(CommandHandler("timeline", timeline, filters=filters.ChatType.PRIVATE))
+
     # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
     app.add_handler(CommandHandler("enviar_carteira", enviar_carteira, filters=filters.ChatType.PRIVATE))
