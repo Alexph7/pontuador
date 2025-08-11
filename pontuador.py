@@ -29,8 +29,10 @@ from telegram.ext import (
 def hoje_data_sp():
     return datetime.now(tz=ZoneInfo("America/Sao_Paulo")).date()
 
+
 def hoje_hora_sp():
     return datetime.now(tz=ZoneInfo("America/Sao_Paulo"))
+
 
 def format_dt_sp(dt: datetime | None, fmt: str = "%d/%m/%Y %H:%M:%S") -> str:
     """
@@ -79,11 +81,11 @@ if admin_ids_env:
 logger.info(f"🛡️ Admins carregados da configuração: {ADMINS}")
 
 NIVEIS_BRINDES = {
-    200: ("🎁 Brinde nível 1", 15),   # = 15 créditos
-    300: ("🎁 Brinde nível 2", 25),   # = 25 créditos
-    500: ("🎁 Brinde nível 3", 40),   # = 40 créditos
-    750: ("🎁 Brinde nível 4", 70),   # = 70 créditos
-    1000:("🎁 Brinde nível 5", 100)   # = 100 créditos
+    200: ("🎁 Brinde nível 1", 15),  # = 15 créditos
+    300: ("🎁 Brinde nível 2", 25),  # = 25 créditos
+    500: ("🎁 Brinde nível 3", 40),  # = 40 créditos
+    750: ("🎁 Brinde nível 4", 70),  # = 70 créditos
+    1000: ("🎁 Brinde nível 5", 100)  # = 100 créditos
 }
 
 # Estados da conversa
@@ -123,7 +125,7 @@ async def init_db_pool():
             motivo TEXT NOT NULL DEFAULT 'Não Especificado',
             data TIMESTAMPTZ  DEFAULT CURRENT_TIMESTAMP
         );
-        
+
        CREATE TABLE IF NOT EXISTS config_checkin (  
             chave TEXT PRIMARY KEY,  -- chave é adicionar pontos por checkin
             valor TEXT NOT NULL   -- valor é true para pontuar por checkin e false pra nao pontuar
@@ -157,7 +159,7 @@ async def init_db_pool():
             tipo        TEXT NOT NULL CHECK (tipo IN ('credito', 'debito')),
             descricao   TEXT NOT NULL,
             criado_em   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        
+
             -- duplicação leve de nome pra exibir no admin se quiser
             username    TEXT NOT NULL DEFAULT 'vazio',
             first_name  TEXT NOT NULL DEFAULT 'vazio',
@@ -169,7 +171,7 @@ async def init_db_pool():
             id   BIGINT PRIMARY KEY,
             nome TEXT
         );
-        
+
        CREATE TABLE IF NOT EXISTS ganhadores_bloqueados (
             user_id BIGINT PRIMARY KEY,
             bloqueado_em TIMESTAMP DEFAULT NOW()
@@ -196,12 +198,12 @@ async def init_db_pool():
             canal_id                    BIGINT REFERENCES canais(id) ON DELETE SET NULL,
             criado_em                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             ativo                       BOOLEAN    NOT NULL DEFAULT TRUE,
-        
+
             total_montante              NUMERIC    NOT NULL,
             valor_premio                NUMERIC    NOT NULL,
             premios_iniciais            INT        NOT NULL,
             premios_restantes           INT        NOT NULL,
-        
+
             total_participantes_esperados INT     NOT NULL,  -- Nº base de participantes
             tentativas_por_usuario        INT     NOT NULL DEFAULT 3,  -- Nº de tentativas antes do cooldown
             cooldown_minutos              INT     NOT NULL DEFAULT 5,  -- Minutos de espera após esgotar
@@ -222,7 +224,7 @@ async def init_db_pool():
             ganho_em TIMESTAMPTZ DEFAULT NOW(),
             PRIMARY KEY (event_id, user_id)
         );
-                    
+
        CREATE TABLE IF NOT EXISTS usuario_history (
             id           SERIAL    PRIMARY KEY,
             user_id      BIGINT    NOT NULL REFERENCES usuarios(user_id) ON DELETE CASCADE,
@@ -396,9 +398,9 @@ async def verificar_canal(user_id: int, bot: Bot) -> tuple[bool, str]:
 async def setup_commands(app):
     try:
         comandos_basicos = [
-            #BotCommand("meus_pontos", "Sua pontuação e nível"),
+            # BotCommand("meus_pontos", "Sua pontuação e nível"),
             BotCommand("rank_tops", "Ranking pontuadores"),
-            #BotCommand("sortear", "Sortear")
+            # BotCommand("sortear", "Sortear")
 
         ]
 
@@ -468,6 +470,7 @@ ADMIN_MENU = (
     "/del – remover pontos de usuário\n"
     "/timeline – todas movimentações de carteiras\n"
     "/pay – pagar compra\n"
+    "/limpar_fila – limpar pedidos na fila\n"
     "/historico_usuario – historico de nomes de usuario\n"
     "/rem – remover admin\n"
     "/listar_usuarios – lista de usuarios cadastrados\n"
@@ -540,6 +543,7 @@ async def remover_admin_db(user_id: int):
 
 ESCOLHENDO_DISPLAY, DIGITANDO_NICK = range(2)
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
@@ -591,6 +595,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=keyboard
     )
     return ESCOLHENDO_DISPLAY
+
 
 async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -644,6 +649,7 @@ async def tratar_display_choice(update: Update, context: ContextTypes.DEFAULT_TY
     # (Opcional) se vier qualquer outra callback_data
     return ConversationHandler.END
 
+
 async def receber_nickname(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     nick = update.message.text.strip()
@@ -661,6 +667,7 @@ async def receber_nickname(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown")
     await enviar_menu(update.effective_chat.id, context.bot)
     return ConversationHandler.END
+
 
 async def perfil_invalido_ou_nao_inscrito(user_id: int, bot: Bot) -> tuple[bool, str]:
     # 1️⃣ Verifica se está no canal, usando o méto do já pronto
@@ -680,7 +687,9 @@ async def perfil_invalido_ou_nao_inscrito(user_id: int, bot: Bot) -> tuple[bool,
 
     return False, ""  # está tudo OK
 
+
 USUARIOS_POR_PAGINA = 20
+
 
 async def listar_via_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     page = int(context.args[0]) if context.args and context.args[0].isdigit() else 1
@@ -1006,6 +1015,7 @@ async def atualizar_pontos(
     logger.info(f"[atualizar_pontos] Pontos atualizados no banco para user_id={user_id}")
     return novos
 
+
 #
 # async def historico(update: Update, context: CallbackContext):
 #     user = update.effective_user
@@ -1136,7 +1146,9 @@ async def tratar_presenca(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await processar_presenca_diaria(perfil, context.bot)
 
+
 logger = logging.getLogger(__name__)
+
 
 async def processar_presenca_diaria(perfil: asyncpg.Record | dict, bot: Bot) -> int | None:
     logger.info(
@@ -1477,6 +1489,7 @@ async def rem_admin_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 PAGE_SIZE_LISTAR = 25
 
+
 async def listar_usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Lista usuários cadastrados de forma paginada, exibindo índice geral (1-based), user_id e first_name
@@ -1752,7 +1765,6 @@ async def estatisticas(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Não foi possível gerar as estatísticas no momento")
 
 
-
 async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMINS:
@@ -1824,6 +1836,7 @@ async def desativar_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text("❌ Check-in desativado. Nenhum usuário ganhará pontos.")
 
+
 # Estados do ConversationHandler
 CONFIG_SORTEIO_MONTANTE = 1
 CONFIG_SORTEIO_PREMIO = 2
@@ -1834,6 +1847,8 @@ CONFIG_SORTEIO_CONFIRMACAO = 6
 
 # Timeout e constantes
 COOLDOWN_MINUTOS = 5
+
+
 async def setar_canal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
 
@@ -1853,9 +1868,11 @@ async def setar_canal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data["canal_id"] = canal_id
     await update.message.reply_text(f"✅ Canal/grupo registrado.")
 
+
 async def configurar_sort(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("🎁 Qual o montante total a distribuir em reais?")
     return CONFIG_SORTEIO_MONTANTE
+
 
 async def receber_montante(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
@@ -1869,6 +1886,7 @@ async def receber_montante(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context.user_data["montante"] = montante
     await update.message.reply_text("💰 Qual o valor de cada prêmio (em R$)?")
     return CONFIG_SORTEIO_PREMIO
+
 
 async def receber_valor_premio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
@@ -1887,6 +1905,7 @@ async def receber_valor_premio(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     return CONFIG_SORTEIO_QTD_PARTICIPANTES
 
+
 async def receber_qtd_participantes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         qtd = int(update.message.text)
@@ -1900,6 +1919,7 @@ async def receber_qtd_participantes(update: Update, context: ContextTypes.DEFAUL
     await update.message.reply_text("🔁 Quantas tentativas cada participante terá?")
     return CONFIG_SORTEIO_TENTATIVAS_POR_USUARIO
 
+
 async def receber_tentativas_por_usuario(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         tentativas = int(update.message.text)
@@ -1912,6 +1932,7 @@ async def receber_tentativas_por_usuario(update: Update, context: ContextTypes.D
     context.user_data["tentativas_por_usuario"] = tentativas
     await update.message.reply_text("⏱ Qual o tempo de espera (em minutos) entre tentativas?")
     return CONFIG_SORTEIO_COOLDOWN
+
 
 async def receber_cooldown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
@@ -1967,10 +1988,10 @@ async def confirmar_sorteio(update: Update, context: ContextTypes.DEFAULT_TYPE) 
              tentativas_por_usuario, cooldown_minutos, tentativa_atual, numero_esperado_atual)
         VALUES ($1, NOW(), TRUE, $2, $3, $4, $4, $5, $6, $7, 0, $8)
     """, canal_id, montante, valor_premio, qtd_premios,
-         context.user_data["qtd_participantes"],
-         context.user_data["tentativas_por_usuario"],
-         context.user_data["cooldown"],
-         numero_sorteado)
+                                           context.user_data["qtd_participantes"],
+                                           context.user_data["tentativas_por_usuario"],
+                                           context.user_data["cooldown"],
+                                           numero_sorteado)
 
     # Limpa tentativas e ganhadores anteriores
     await context.bot_data["pool"].execute("DELETE FROM sorteio_tentativas")
@@ -1978,6 +1999,7 @@ async def confirmar_sorteio(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await query.edit_message_text("✅ Sorteio configurado com sucesso!")
     return ConversationHandler.END
+
 
 async def cancelar_sort(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Desativa o sorteio ativo
@@ -1997,6 +2019,7 @@ async def cancelar_sort(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Defina o chat de suporte logo após as importações
 CHAT_ID_SUPORTE = -1002563145936  # substitua pelo seu ID real
+
 
 async def sortear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -2129,6 +2152,7 @@ async def sortear(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"😔 Não foi dessa vez. Tente novamente em {evento['cooldown_minutos']} minutos!"
     )
 
+
 async def liberar_ganhadores(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ADMINS = context.bot_data.get("chat_admin", set())
     user_id = update.effective_user.id
@@ -2158,6 +2182,7 @@ async def sort_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Número a acertar: {estado['numero_esperado_atual']}"
     )
 
+
 async def list_ganhadores_sort(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = await context.bot_data["pool"].fetch(
         """
@@ -2176,8 +2201,10 @@ async def list_ganhadores_sort(update: Update, context: ContextTypes.DEFAULT_TYP
     lista = "\n".join(f"- {r['user_id']} em {r['ganho_em']}" for r in rows)
     await update.message.reply_text(f"🏆 Ganhadores:\n{lista}")
 
+
 # Quantos itens por página
 PAGE_SIZE_RANKING = 50
+
 
 async def listar_pontuadores(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1) Determina a página (default = 1)
@@ -2238,9 +2265,9 @@ async def listar_pontuadores(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # 5) Botões de navegação
     buttons = []
     if page > 1:
-        buttons.append(InlineKeyboardButton("◀️ Anterior", callback_data=f"ranking|{page-1}"))
+        buttons.append(InlineKeyboardButton("◀️ Anterior", callback_data=f"ranking|{page - 1}"))
     if page < total_paginas:
-        buttons.append(InlineKeyboardButton("Próximo ▶️", callback_data=f"ranking|{page+1}"))
+        buttons.append(InlineKeyboardButton("Próximo ▶️", callback_data=f"ranking|{page + 1}"))
     reply_markup = InlineKeyboardMarkup([buttons]) if buttons else None
 
     # 6) Envia ou edita mensagem
@@ -2254,6 +2281,7 @@ async def listar_pontuadores(update: Update, context: ContextTypes.DEFAULT_TYPE)
             texto, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup
         )
 
+
 # Callback para tratar os cliques
 async def callback_listar_ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()  # para parar o spinner
@@ -2262,12 +2290,14 @@ async def callback_listar_ranking(update: Update, context: ContextTypes.DEFAULT_
     context.args = [nova_pagina]
     await listar_pontuadores(update, context)
 
+
 ESCOLHENDO_RESGATE = 0
 DIGITANDO_PIX = 1
 DIGITANDO_WALLET = 2
-CONFIRMANDO_CODIGO   = 3
+CONFIRMANDO_CODIGO = 3
 
 ADMIN_CHANNEL_ID = -1002681288915  # coloque aqui o chat_id do canal/admin
+
 
 async def resgatar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -2336,7 +2366,7 @@ async def resgatar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             texto,
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup([[
-                #InlineKeyboardButton("📥 Enviar código", callback_data="resgatar_codigo"),
+                # InlineKeyboardButton("📥 Enviar código", callback_data="resgatar_codigo"),
                 InlineKeyboardButton("💰 Enviar carteira", callback_data="resgatar_carteira"),
             ]])
         )
@@ -2351,6 +2381,7 @@ async def resgatar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Tente novamente mais tarde ou contate o suporte."
     )
 
+
 # ─── Novo handler para “Enviar código” ───
 async def iniciar_resgatar_codigo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
@@ -2359,11 +2390,13 @@ async def iniciar_resgatar_codigo(update: Update, context: ContextTypes.DEFAULT_
     user_id = update.effective_user.id
     saldo = await pool.fetchval("SELECT saldo FROM wallet WHERE user_id = $1", user_id) or 0
     if saldo < 1:
-        await update.callback_query.edit_message_text("❌ Créditos insuficientes para usar agora. Você pode mover para a carteira e acumular mais.")
+        await update.callback_query.edit_message_text(
+            "❌ Créditos insuficientes para usar agora. Você pode mover para a carteira e acumular mais.")
         return ConversationHandler.END
 
     await update.callback_query.edit_message_text("✅ Perfeito! Agora envie o código da sua compra...")
     return DIGITANDO_PIX
+
 
 # ─── Novo handler para “Enviar para carteira” ───
 async def iniciar_resgatar_carteira(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2376,6 +2409,7 @@ async def iniciar_resgatar_carteira(update: Update, context: ContextTypes.DEFAUL
         "digite /wallet."
     )
     return ConversationHandler.END
+
 
 # ─── Registre estes callbacks no seu main() ───
 
@@ -2415,6 +2449,7 @@ async def receber_codigo_pix(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
     return CONFIRMANDO_CODIGO
 
+
 async def confirmar_codigo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     user = update.effective_user
@@ -2452,7 +2487,7 @@ async def confirmar_codigo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid, cred
         )
         await pool.execute("UPDATE usuarios SET pontos=0 WHERE user_id=$1", uid)
-        #3️⃣ histórico pessoal
+        # 3️⃣ histórico pessoal
         await pool.execute(
             """
             INSERT INTO wallet_historico_user
@@ -2460,7 +2495,7 @@ async def confirmar_codigo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 VALUES ($1,$2,'credito','Resgate automático',$3,$4,$5)
             """,
             uid, cred, user.username or 'vazio',
-            user.first_name or 'vazio', user.last_name or 'vazio'
+                       user.first_name or 'vazio', user.last_name or 'vazio'
         )
         # 4️⃣ log global
         await pool.execute(
@@ -2475,7 +2510,8 @@ async def confirmar_codigo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return ConversationHandler.END
 
-    titulo = "📥 *Uso de carteira agora*" if context.user_data.get("fluxo") == "wallet" else "📥 *Novo código para pagamento de créditos*"
+    titulo = "📥 *Uso de carteira agora*" if context.user_data.get(
+        "fluxo") == "wallet" else "📥 *Novo código para pagamento de créditos*"
 
     await context.bot.send_message(
         chat_id=ADMIN_CHANNEL_ID,
@@ -2490,6 +2526,7 @@ async def confirmar_codigo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.edit_message_text("✅ Código enviado com sucesso. Aguarde confirmação de pagamento.")
     return ConversationHandler.END
 
+
 async def cancelar_codigo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     await update.callback_query.edit_message_text("❌ Envio cancelado.")
@@ -2500,6 +2537,7 @@ async def cancelar_codigo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cancelar_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Resgate cancelado.")
     return ConversationHandler.END
+
 
 # 4) Registre o ConversationHandler no seu setup:
 conv_resgate = ConversationHandler(
@@ -2518,12 +2556,13 @@ conv_resgate = ConversationHandler(
         # ],
         CONFIRMANDO_CODIGO: [
             CallbackQueryHandler(confirmar_codigo, pattern="^confirmar_codigo$"),
-            CallbackQueryHandler(cancelar_codigo,    pattern="^cancelar_codigo$")
+            CallbackQueryHandler(cancelar_codigo, pattern="^cancelar_codigo$")
         ]
     },
     fallbacks=[CommandHandler("cancelar", cancelar_pix)],
     per_message=False,
 )
+
 
 async def enviar_carteira(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -2648,6 +2687,7 @@ async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]])
     )
 
+
 # ─── Quando clicar “Utilizar” ───
 async def iniciar_utilizar_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
@@ -2666,6 +2706,7 @@ async def iniciar_utilizar_wallet(update: Update, context: ContextTypes.DEFAULT_
         "✏️ Por favor, envie o código da sua compra para processar o débito."
     )
     return DIGITANDO_WALLET  # passa para o estado de receber o código
+
 
 # ─── Recebe o código de uso da carteira ───
 async def receber_codigo_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2707,6 +2748,7 @@ async def receber_codigo_wallet(update: Update, context: ContextTypes.DEFAULT_TY
         "✅ Código enviado ao admin para processar o débito."
     )
     return ConversationHandler.END
+
 
 conv_wallet = ConversationHandler(
     entry_points=[
@@ -2752,10 +2794,10 @@ async def ver_historico_wallet(update: Update, context: ContextTypes.DEFAULT_TYP
             .strftime("%d/%m")
         valor = row["valor"]
         if valor > 0:
-            tipo  = "Ganho de"
+            tipo = "Ganho de"
             sinal = f"+{valor}"
         else:
-            tipo  = "Débito de"
+            tipo = "Débito de"
             sinal = f"-{abs(valor)}"
 
         texto += f"📆 {data_fmt} - {tipo} {sinal} créditos\n"
@@ -2785,17 +2827,17 @@ async def timeline(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     texto = "🕒 *Linha do Tempo de Atividades* (ultimas 50)\n\n"
     for r in rows:
-        ts = r["criado_em"].astimezone(ZoneInfo("America/Sao_Paulo"))\
-                            .strftime("%d/%m %H:%M")
+        ts = r["criado_em"].astimezone(ZoneInfo("America/Sao_Paulo")) \
+            .strftime("%d/%m %H:%M")
         uid = r["usuario_id"]
         nome = (
-            r.get("username")
-            or r.get("first_name")
-            or r.get("last_name")
-            or "sem nome"
+                r.get("username")
+                or r.get("first_name")
+                or r.get("last_name")
+                or "sem nome"
         )
         evt = r["evento"].replace("_", " ").title()
-        det = json.loads(r["detalhes"])   # <-- CONVERTE JSON string para dict
+        det = json.loads(r["detalhes"])  # <-- CONVERTE JSON string para dict
 
         # Ex: detalhar créditos ou motivo
         extra = ""
@@ -2810,6 +2852,8 @@ async def timeline(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 PAY_CODIGO, PAY_VALOR, PAY_CONFIRM_REMOVE = range(3)
+
+
 async def pay_fila(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Lista todos os pedidos na fila por ordem de chegada."""
     rows = await pool.fetch(
@@ -2855,15 +2899,15 @@ async def pay_fila(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"({display}) — {ts}\n"
         )
 
-    await update.message.reply_text(texto, parse_mode="Markdown")
+    await update.message.reply_text(texto)
     return PAY_CODIGO
 
-from telegram.ext import CommandHandler
 
 async def start_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Cancela qualquer conversa anterior e reinicia o fluxo
     await update.message.reply_text("🔄 Reiniciando pagamento...")
     return await pay_fila(update, context)
+
 
 async def pay_codigo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Recebe o código PIX e identifica o pedido."""
@@ -2885,6 +2929,7 @@ async def pay_codigo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
     return PAY_VALOR
+
 
 async def pay_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Recebe valor, verifica saldo, debita, notifica e remove da fila."""
@@ -2968,7 +3013,7 @@ async def pay_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id, display, context.user_data["pay_code"], valor
     )
 
-    #Remove da fila
+    # Remove da fila
     await pool.execute("DELETE FROM fila_pagamento WHERE id = $1", pay_id)
 
     # notifica usuário
@@ -3016,11 +3061,19 @@ async def pay_confirm_remove(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return PAY_CONFIRM_REMOVE
 
+async def limpar_fila(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Apaga todos os registros
+    apagados = await pool.execute("DELETE FROM fila_pagamento")
+
+    # Mensagem de retorno para o admin
+    await update.message.reply_text(f"🧹 Fila de pagamentos limpa.\nRegistros apagados: {apagados}")
+
+
 conv_pay = ConversationHandler(
     entry_points=[CommandHandler("pay", start_pay)],
     states={
         PAY_CODIGO: [MessageHandler(filters.TEXT & ~filters.COMMAND, pay_codigo)],
-        PAY_VALOR:  [MessageHandler(filters.TEXT & ~filters.COMMAND, pay_valor)],
+        PAY_VALOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, pay_valor)],
         PAY_CONFIRM_REMOVE: [
             MessageHandler(filters.Regex("(?i)^(sim|s|não|nao|n)$"), pay_confirm_remove),
             MessageHandler(filters.TEXT & ~filters.COMMAND, pay_confirm_remove)
@@ -3028,11 +3081,12 @@ conv_pay = ConversationHandler(
     },
 
     fallbacks=[
-        CommandHandler("cancelar", lambda u,c: ConversationHandler.END),
+        CommandHandler("cancelar", lambda u, c: ConversationHandler.END),
         CommandHandler("pay", start_pay)
-        ],
+    ],
     per_message=False,
 )
+
 
 async def on_startup(app):
     global ADMINS
@@ -3181,14 +3235,14 @@ async def main():
     app.add_handler(CallbackQueryHandler(callback_historico, pattern=r"^hist:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(paginacao_via_start, pattern=r"^via_start:\d+$"))
     app.add_handler(CommandHandler("backup", cmd_backup))
-    #app.add_handler(CommandHandler("sortear", sortear))
+    # app.add_handler(CommandHandler("sortear", sortear))
     app.add_handler(CommandHandler("set", setar_canal))
     app.add_handler(sort_config_conv)
 
     app.add_handler(CommandHandler('rank_tops', ranking_tops))
     app.add_handler(CommandHandler("historico_usuario", historico_usuario, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("listar_usuarios", listar_usuarios, filters=filters.ChatType.PRIVATE))
-    app.add_handler(CallbackQueryHandler(callback_listar_usuarios,pattern=r'^usuarios\|\d+$'))
+    app.add_handler(CallbackQueryHandler(callback_listar_usuarios, pattern=r'^usuarios\|\d+$'))
     app.add_handler(CommandHandler("listar_via_start", listar_via_start, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("estatisticas", estatisticas, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler('como_ganhar', como_ganhar, filters=filters.ChatType.PRIVATE))
@@ -3200,12 +3254,12 @@ async def main():
     app.add_handler(CommandHandler("liberar_ganhadores", liberar_ganhadores, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("list_ganhadores_sort", list_ganhadores_sort))
     app.add_handler(CommandHandler("list_pontuadores", listar_pontuadores, filters=filters.ChatType.PRIVATE))
-    app.add_handler(CallbackQueryHandler(callback_listar_ranking,pattern=r"^ranking\|\d+$"))
+    app.add_handler(CallbackQueryHandler(callback_listar_ranking, pattern=r"^ranking\|\d+$"))
     app.add_handler(CallbackQueryHandler(iniciar_resgatar_codigo, pattern=r"^resgatar_codigo$"))
     app.add_handler(CallbackQueryHandler(iniciar_resgatar_carteira, pattern=r"^resgatar_carteira$"))
     app.add_handler(CallbackQueryHandler(ver_historico_wallet, pattern=r"^ver_historico_wallet$"))
     app.add_handler(CommandHandler("timeline", timeline, filters=filters.ChatType.PRIVATE))
-
+    app.add_handler(CommandHandler("limpar_fila", limpar_fila))
     # Presença em grupos
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, tratar_presenca))
     app.add_handler(CommandHandler("enviar_carteira", enviar_carteira, filters=filters.ChatType.PRIVATE))
