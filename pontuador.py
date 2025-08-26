@@ -399,7 +399,7 @@ async def setup_commands(app):
     try:
         comandos_basicos = [
             # BotCommand("meus_pontos", "Sua pontuação e nível"),
-            BotCommand("rank_tops", "Ranking pontuadores"),
+            #BotCommand("rank_tops", "Ranking pontuadores"),
             # BotCommand("sortear", "Sortear")
 
         ]
@@ -413,7 +413,7 @@ async def setup_commands(app):
         # 2) Comandos em chat privado (com suporte)
         comandos_privados = comandos_basicos + [
             BotCommand("inicio", "Volte ao começo"),
-            BotCommand("resgatar", "Resgate seu brinde"),
+            #BotCommand("resgatar", "Resgate seu brinde"),
             BotCommand("wallet", "Carteira"),
             # BotCommand("historico", "Mostrar seu histórico"),
             # BotCommand("list_pontuadores", "listar usuarios a partir de 200 pontos"),
@@ -432,11 +432,11 @@ async def setup_commands(app):
 
 
 COMANDOS_PUBLICOS = [
-    ("/meus_pontos", "Ver sua pontuação e nível"),
-    ("/resgatar", "Resgate seu brinde"),
+    #("/meus_pontos", "Ver sua pontuação e nível"),
+    #("/resgatar", "Resgate seu brinde"),
     ("/wallet", "Carteira"),
     # ("/historico", "Mostrar seu histórico de pontos"),
-    ("/rank_tops", "Ranking usuários por pontos"),
+    #("/rank_tops", "Ranking usuários por pontos"),
     # ("/list_pontuadores", "Todos pontuadores a partir de 100pts"),
     ("/como_ganhar", "Como ganhar mais pontos"),
     ("/news", "Ver Novas Atualizações"),
@@ -828,8 +828,8 @@ async def como_ganhar(update: Update, context: CallbackContext):
         return
 
     texto = (
-        "🎯* Ultima Interação Válida a Partir de 1 de Maio de 2025 a 30 de Junho*\n\n"
-        "Interações terminadas, em breve novas atualizações"
+        "🎯* Ultima Interação Válida Resgate de Brinde (04 de Agosto a 25 de Agosto 2025)*\n\n"
+        "Interações terminadas, em breve novas Interações"
 
     )
 
@@ -847,7 +847,7 @@ async def news(update: Update, context: CallbackContext):
 
     await update.message.reply_text(
         "🆕 *Novidades* ( -- 2025)\n\n"
-        "Novidades em Breve",
+        "Resgate de Brinde (04 de Agosto a 25 de Agosto 2025) - Terminados",
         parse_mode="Markdown"
     )
 
@@ -2711,6 +2711,7 @@ async def iniciar_utilizar_wallet(update: Update, context: ContextTypes.DEFAULT_
 # ─── Recebe o código de uso da carteira ───
 async def receber_codigo_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    uid = user.id
     codigo = update.message.text.strip()
 
     if user.username:
@@ -2728,25 +2729,49 @@ async def receber_codigo_wallet(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return DIGITANDO_WALLET
 
-    # ─── Registra o pedido na fila de pagamento ───
-    await pool.execute(
-        "INSERT INTO fila_pagamento (user_id, code) VALUES ($1, $2)",
-        update.effective_user.id, codigo
+    # INSERÇÃO ATÔMICA: só insere se NÃO existir pedido pendente para este user
+    try:
+        row_id = await pool.fetchval(
+            """
+            INSERT INTO fila_pagamento (user_id, code, created_em)
+            SELECT $1, $2, NOW()
+            WHERE NOT EXISTS (SELECT 1 FROM fila_pagamento WHERE user_id = $1)
+            RETURNING id
+            """,
+            uid, codigo
+        )
+    except Exception:
+        logger.exception("Erro ao inserir na fila_pagamento")
+        await update.message.reply_text("❌ Erro ao registrar pedido. Tente novamente mais tarde.")
+        return ConversationHandler.END
+
+    if not row_id:
+        # já existe um pedido para esse usuário -> avisa e não duplica
+        await update.message.reply_text(
+            "⏳ Você já tem um pedido na fila. Aguarde a confirmação antes de enviar outro código."
+        )
+        return ConversationHandler.END
+
+    # Aqui NÃO notificamos o admin — apenas confirmamos ao usuário
+    await update.message.reply_text(
+        "✅ Código registrado na fila. Aguarde a confirmação / processamento. "
+        "Verifique /wallet mais tarde para o saldo."
     )
 
-    # encaminha para o canal/admin
-    await context.bot.send_message(
-        chat_id=ADMIN_CHANNEL_ID,
-        text=(
-            f"📥 *Uso de carteira*\n"
-            f"*Usuário:* `{update.effective_user.id}`— {display}\n"
-            f"*Código:* `{codigo}`"
-        ),
-        parse_mode="Markdown"
-    )
-    await update.message.reply_text(
-        "✅ Código enviado ao admin para processar o débito."
-    )
+    # garante que o teclado antigo não fique ativo (se tivermos referência)
+    try:
+        chat_id = context.user_data.get("wallet_message_chat_id")
+        msg_id = context.user_data.get("wallet_message_id")
+        if chat_id and msg_id:
+            await context.bot.edit_message_reply_markup(chat_id=chat_id, message_id=msg_id, reply_markup=None)
+    except Exception:
+        logger.exception("Falha ao remover reply_markup do wallet_message original")
+
+    # cleanup final
+    context.user_data.pop("using_wallet", None)
+    context.user_data.pop("wallet_message_chat_id", None)
+    context.user_data.pop("wallet_message_id", None)
+
     return ConversationHandler.END
 
 
@@ -3239,7 +3264,7 @@ async def main():
     app.add_handler(CommandHandler("set", setar_canal))
     app.add_handler(sort_config_conv)
 
-    app.add_handler(CommandHandler('rank_tops', ranking_tops))
+    #app.add_handler(CommandHandler('rank_tops', ranking_tops))
     app.add_handler(CommandHandler("historico_usuario", historico_usuario, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("listar_usuarios", listar_usuarios, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(callback_listar_usuarios, pattern=r'^usuarios\|\d+$'))
@@ -3255,8 +3280,8 @@ async def main():
     app.add_handler(CommandHandler("list_ganhadores_sort", list_ganhadores_sort))
     app.add_handler(CommandHandler("list_pontuadores", listar_pontuadores, filters=filters.ChatType.PRIVATE))
     app.add_handler(CallbackQueryHandler(callback_listar_ranking, pattern=r"^ranking\|\d+$"))
-    app.add_handler(CallbackQueryHandler(iniciar_resgatar_codigo, pattern=r"^resgatar_codigo$"))
-    app.add_handler(CallbackQueryHandler(iniciar_resgatar_carteira, pattern=r"^resgatar_carteira$"))
+    #app.add_handler(CallbackQueryHandler(iniciar_resgatar_codigo, pattern=r"^resgatar_codigo$"))
+    #app.add_handler(CallbackQueryHandler(iniciar_resgatar_carteira, pattern=r"^resgatar_carteira$"))
     app.add_handler(CallbackQueryHandler(ver_historico_wallet, pattern=r"^ver_historico_wallet$"))
     app.add_handler(CommandHandler("timeline", timeline, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("limpar_fila", limpar_fila))
